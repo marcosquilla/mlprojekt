@@ -101,7 +101,7 @@ target/
 bin/
 
 # exclude data from source control by default
-/data
+/data/
 
 # exclude external models from source control
 /src/external/
