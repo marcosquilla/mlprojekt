@@ -101,13 +101,13 @@ target/
 bin/
 
 # exclude data from source control by default
-/data/
+#/data/
 
 # exclude external models from source control
 /src/external/
 
 # exclude models checkpoints from source control by default
-/models/
+#/models/
 
 # Mac OS-specific storage files
 .DS_Store
