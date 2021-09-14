@@ -103,12 +103,14 @@ bin/
 # exclude data from source control by default
 /data/raw/
 /data/interim/
+/data/external/
+/data/processed/
 
 # exclude external models from source control
 /src/external/
 
 # exclude models checkpoints from source control by default
-#/models/
+/models/
 
 # Mac OS-specific storage files
 .DS_Store
