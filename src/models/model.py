@@ -11,13 +11,13 @@ class BalanceModel(pl.LightningModule):
      lr_policy=1e-3, lr_Q=1e-3, gamma=0.999, tau=0.01):
         super().__init__()
         
-        if ~isinstance(hidden_layers_policy, (list, tuple, set, np.ndarray, pd.Series)):
+        if not isinstance(hidden_layers_policy, (list, tuple, set, np.ndarray, pd.Series)):
             raise TypeError("hidden_layers_policy is not list-like")
-        if ~isinstance(hidden_layers_Q, (list, tuple, set, np.ndarray, pd.Series)):
+        if not isinstance(hidden_layers_Q, (list, tuple, set, np.ndarray, pd.Series)):
             raise TypeError("hidden_layers_Q is not list-like")
-        if ~all(isinstance(n, int) for n in hidden_layers_policy):
+        if not all(isinstance(n, int) for n in hidden_layers_policy):
             raise TypeError("hidden_layers_policy can only contain int")
-        if ~all(isinstance(n, int) for n in hidden_layers_Q):
+        if not all(isinstance(n, int) for n in hidden_layers_Q):
             raise TypeError("hidden_layers_Q can only contain int")
 
         self.lr_policy = lr_policy

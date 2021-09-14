@@ -17,14 +17,15 @@ class DataModule(pl.LightningDataModule):
     time_start=datetime(2020, 2, 1, 0, 56, 26), time_end=datetime(2021, 5, 3, 23, 59, 55), seed:int=42, random_seed:bool=False):
         super().__init__()
 
-        if type(batch_size) is not int:
+        if not isinstance(batch_size, int):
             raise TypeError("batch_size has to be integer")
-        if type(time_step) is not timedelta:
+        if not isinstance(time_step, timedelta):
             raise TypeError("time_step is not timedelta")
-        if type(time_start) is not datetime:
+        if not isinstance(time_start, datetime):
             raise TypeError("time_start is not datetime")
-        if type(time_end) is not datetime:
+        if not isinstance(time_end, datetime):
             raise TypeError("time_end is not datetime")
+
         if not random_seed:
             pl.seed_everything(seed=seed)
         self.batch_size=batch_size
@@ -93,11 +94,11 @@ class DataModule(pl.LightningDataModule):
 class sarDataset(Dataset):
     def __init__(self, timepoints, time_window:timedelta=timedelta(hours=1)):
 
-        if ~isinstance(timepoints, (list, tuple, set, np.ndarray, pd.Series)):
+        if not isinstance(timepoints, (list, tuple, set, np.ndarray, pd.Series)):
             raise TypeError("timepoints is not list-like")
-        if ~all(isinstance(n, datetime) for n in timepoints):
+        if not all(isinstance(n, datetime) for n in timepoints):
             raise TypeError("timepoints array has to contain datetime objects")
-        if type(time_window) is not timedelta:
+        if not isinstance(time_window, timedelta):
             raise TypeError("time_window is not timedelta")
         
         self.timepoint = timepoints
@@ -199,10 +200,9 @@ class sarDataset(Dataset):
         return s, a, s1, r
 
 if __name__ == "__main__":
-    print(type(np.arange(datetime(2020, 2, 1, 0, 56, 26), datetime(2020, 2, 1, 0, 56, 26), timedelta(hours=1)).astype(datetime))) #TODO: Fix isinstance
-    # data = sarDataset(np.arange(datetime(2020, 2, 1, 0, 56, 26), datetime(2020, 2, 1, 0, 56, 26), timedelta(hours=1)).astype(datetime))
-    # s, a, s1, r = data[1000]
-    # print('s:', s, '\n\n')
-    # print('a:', a, '\n\n')
-    # print('s1:', s1, '\n\n')
-    # print('r:', r, '\n\n')
+    data = sarDataset(np.arange(datetime(2020, 2, 1, 0, 56, 26), datetime(2020, 2, 1, 0, 56, 26), timedelta(hours=1)).astype(datetime))
+    s, a, s1, r = data[1000]
+    print('s:', s, '\n\n')
+    print('a:', a, '\n\n')
+    print('s1:', s1, '\n\n')
+    print('r:', r, '\n\n')
