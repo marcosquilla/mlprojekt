@@ -5,7 +5,8 @@ from torch import nn
 import torch.nn.functional as F
 import pytorch_lightning as pl
 
-#TODO: Include weight saving and loading, argparse and hyperparameter saving
+#TODO: Implement test_step (and maybe validation_step). Include weight saving and loading, argparse and hyperparameter saving
+
 class BalanceModel(pl.LightningModule):
     def __init__(self, hidden_layers_policy=[50, 20], hidden_layers_Q=[50, 20],
      lr_policy=1e-3, lr_Q=1e-3, gamma=0.999, tau=0.01):

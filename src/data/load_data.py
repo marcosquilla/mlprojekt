@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader, Dataset
 from datetime import datetime, timedelta, date
 from pyproj import Geod
 
-#TODO: Include params: time_window, timepoint_delta
+#TODO: Check action times and regulate time_window and timepoint_delta
 
 class DataModule(pl.LightningDataModule):
     def __init__(self, batch_size:int=16, time_step:timedelta=timedelta(hours=1),
@@ -38,7 +38,7 @@ class DataModule(pl.LightningDataModule):
             self.prepare_data()
 
     def setup(self, stage=None):
-
+        #TODO: Include percentages as parameters.
         if stage in (None, "fit"):
             train_idx = self.timepoints[:int(len(self.timepoints)*0.7)]
             self.train_data = sarDataset(train_idx)
@@ -59,7 +59,8 @@ class DataModule(pl.LightningDataModule):
         return DataLoader(self.test_data, batch_size=self.batch_size)
 
     def prepare_data(self, create_rental=False, rental_folder:str='SN rentals', open_folder:str='SN App requests'):
-        #TODO: Include data download
+        #TODO: Include data download. Split area_centers
+        #Takes raw files, concatenates them, selects useful columns and saved into a single file.
         if create_rental:
             rent_files = glob.glob(str(Path.cwd() / 'data' / 'raw' / rental_folder / '*.xlsx'))
             rent_dfs = [pd.read_excel(f, skiprows=[0,1]) for f in rent_files]
@@ -192,7 +193,6 @@ class sarDataset(Dataset):
         return len(self.timepoint)
 
     def __getitem__(self, idx):
-        #TODO: (Check action times and regulate time_window and timepoint_delta)
         s = self.state(idx) # Returns position of cars in timepoint idx and demand between idx-timedelta and idx
         a = self.actions(idx) # Returns end position of cars due to service trips within idx-timedelta (only moved cars)
         s1 = self.state(idx+1) # Returns position of cars in timepoint idx+1 and demand between idx+1-timedelta and idx+1
