@@ -3,6 +3,8 @@ import pyproj
 import shapely.geometry
 from global_land_mask import globe
 
+# Script to create an evenly spaced grid of points in land area
+
 def save_grid(stepsize=1000, swlat=55.4355410101663, swlon=12.140848911388979, nelat=56.06417055142977, nelon=12.688363746232875):
     # Set up transformers, EPSG:3857 is metric, same as EPSG:900913
     to_proxy_transformer = pyproj.Transformer.from_crs('epsg:4326', 'epsg:3857')

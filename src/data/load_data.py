@@ -8,6 +8,7 @@ import pandas as pd
 import pytorch_lightning as pl
 from torch.utils.data import DataLoader, Dataset
 from datetime import datetime, timedelta, date
+from sklearn.cluster import KMeans
 from pyproj import Geod
 
 #TODO: Check action times and regulate time_window and timepoint_delta
@@ -58,7 +59,7 @@ class DataModule(pl.LightningDataModule):
     def test_dataloader(self):
         return DataLoader(self.test_data, batch_size=self.batch_size)
 
-    def prepare_data(self, create_rental=False, rental_folder:str='SN rentals', open_folder:str='SN App requests'):
+    def prepare_data(self, create_rental=False, n_clusters:int=300, rental_folder:str='SN rentals', open_folder:str='SN App requests'):
         #TODO: Include data download. Split area_centers
         #Takes raw files, concatenates them, selects useful columns and saved into a single file.
         if create_rental:
@@ -73,17 +74,18 @@ class DataModule(pl.LightningDataModule):
             'Start_Datetime_Local', 'End_Datetime_Local',
             'Start_GPS_Latitude', 'Start_GPS_Longitude',
             'End_GPS_Latitude', 'End_GPS_Longitude', 'Package_Description',
-            'Operation_State_Name_Before', 'Operation_State_Name_After',
-            'Start_Zone_Name', 'End_Zone_Name', 'Reservation_YN',
+            'Operation_State_Name_Before', 'Operation_State_Name_After', 'Reservation_YN',
             'Prebooking_YN', 'Servicedrive_YN']]
-            rental.to_csv(Path.cwd() / 'data' / 'interim' / 'rental.csv', index=False)
+            # Virtual area creation with KMeans and assignment to all rentals
+            km = KMeans(n_clusters=n_clusters, verbose=3).fit(rental.loc[:,['Start_GPS_Latitude','Start_GPS_Longitude']])
+            rental['Start_Zone_Name'] = ['virtual_zone_'+str(label) for label in km.labels_]
+            rental['End_Zone_Name'] = ['virtual_zone_'+str(label) for label in km.predict(rental.loc[:,['End_GPS_Latitude','End_GPS_Longitude']])]
+            area_centers = pd.DataFrame(km.cluster_centers_, columns=['GPS_Latitude','GPS_Longitude'])
+            area_centers['Area'] = ['virtual_zone_'+str(label) for label in area_centers.index]
+            area_centers = area_centers.loc[:,['Area','GPS_Latitude','GPS_Longitude']]
 
-            area_centers = rental.groupby('End_Zone_Name').mean()[['End_GPS_Latitude','End_GPS_Longitude']]
-            area_centers.rename(columns={
-                'End_GPS_Latitude': 'GPS_Latitude', 
-                'End_GPS_Longitude': 'GPS_Longitude'}, inplace=True)
-            area_centers.index.names = ['Area']
-            area_centers.to_csv(Path.cwd() / 'data' / 'interim' / 'areas.csv')
+            rental.to_csv(Path.cwd() / 'data' / 'interim' / 'rental.csv', index=False)
+            area_centers.to_csv(Path.cwd() / 'data' / 'interim' / 'areas.csv', index=False)
         else:
             open_files = glob.glob(str(Path.cwd() / 'data' / 'raw' / open_folder / '*.csv'))
             open_dfs = [pd.read_csv(f) for f in open_files]
@@ -200,9 +202,10 @@ class sarDataset(Dataset):
         return s, a, s1, r
 
 if __name__ == "__main__":
-    data = sarDataset(np.arange(datetime(2020, 2, 1, 0, 56, 26), datetime(2020, 2, 1, 0, 56, 26), timedelta(hours=1)).astype(datetime))
-    s, a, s1, r = data[1000]
-    print('s:', s, '\n\n')
-    print('a:', a, '\n\n')
-    print('s1:', s1, '\n\n')
-    print('r:', r, '\n\n')
+    dm = DataModule()
+    # data = sarDataset(np.arange(datetime(2020, 2, 1, 0, 56, 26), datetime(2020, 2, 1, 0, 56, 26), timedelta(hours=1)).astype(datetime))
+    # s, a, s1, r = data[1000]
+    # print('s:', s, '\n\n')
+    # print('a:', a, '\n\n')
+    # print('s1:', s1, '\n\n')
+    # print('r:', r, '\n\n')
