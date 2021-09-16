@@ -14,7 +14,7 @@ from pyproj import Geod
 #TODO: Check action times and regulate time_window and timepoint_delta
 
 class DataModule(pl.LightningDataModule):
-    def __init__(self, batch_size:int=16, time_step:timedelta=timedelta(hours=1),
+    def __init__(self, batch_size:int=16, time_step:timedelta=timedelta(hours=1), 
     time_start=datetime(2020, 2, 1, 0, 56, 26), time_end=datetime(2021, 5, 3, 23, 59, 55), seed:int=42, random_seed:bool=False):
         super().__init__()
 
@@ -31,12 +31,6 @@ class DataModule(pl.LightningDataModule):
             pl.seed_everything(seed=seed)
         self.batch_size=batch_size
         self.timepoints = np.arange(time_start, time_end, time_step).astype(datetime) # Link between indexes and datetimes
-
-        if ~((Path.cwd() / 'data' / 'interim' / 'rental.csv').is_file() & 
-                (Path.cwd() / 'data' / 'interim' / 'area_centers.csv').is_file()):
-            self.prepare_data(create_rental=True)
-        if ~((Path.cwd() / 'data' / 'interim' / 'openings.csv').is_file()):
-            self.prepare_data()
 
     def setup(self, stage=None):
         #TODO: Include percentages as parameters.
@@ -59,10 +53,11 @@ class DataModule(pl.LightningDataModule):
     def test_dataloader(self):
         return DataLoader(self.test_data, batch_size=self.batch_size)
 
-    def prepare_data(self, create_rental=False, n_clusters:int=300, rental_folder:str='SN rentals', open_folder:str='SN App requests'):
-        #TODO: Include data download. Split area_centers
+    def prepare_data(self, n_zones:int=300, rental_folder:str='SN rentals', open_folder:str='SN App requests'):
+        #TODO: Include data download.
         #Takes raw files, concatenates them, selects useful columns and saved into a single file.
-        if create_rental:
+        if not ((Path.cwd() / 'data' / 'interim' / 'rental.csv').is_file() & 
+                (Path.cwd() / 'data' / 'interim' / 'areas.csv').is_file()):
             rent_files = glob.glob(str(Path.cwd() / 'data' / 'raw' / rental_folder / '*.xlsx'))
             rent_dfs = [pd.read_excel(f, skiprows=[0,1]) for f in rent_files]
             rental = pd.concat(rent_dfs,ignore_index=True)
@@ -75,18 +70,20 @@ class DataModule(pl.LightningDataModule):
             'Start_GPS_Latitude', 'Start_GPS_Longitude',
             'End_GPS_Latitude', 'End_GPS_Longitude', 'Package_Description',
             'Operation_State_Name_Before', 'Operation_State_Name_After', 'Reservation_YN',
-            'Prebooking_YN', 'Servicedrive_YN']]
+            'Prebooking_YN', 'Servicedrive_YN', 'Start_Zone_Name', 'End_Zone_Name']]
+
             # Virtual area creation with KMeans and assignment to all rentals
-            km = KMeans(n_clusters=n_clusters, verbose=3).fit(rental.loc[:,['Start_GPS_Latitude','Start_GPS_Longitude']])
-            rental['Start_Zone_Name'] = ['virtual_zone_'+str(label) for label in km.labels_]
-            rental['End_Zone_Name'] = ['virtual_zone_'+str(label) for label in km.predict(rental.loc[:,['End_GPS_Latitude','End_GPS_Longitude']])]
-            area_centers = pd.DataFrame(km.cluster_centers_, columns=['GPS_Latitude','GPS_Longitude'])
-            area_centers['Area'] = ['virtual_zone_'+str(label) for label in area_centers.index]
-            area_centers = area_centers.loc[:,['Area','GPS_Latitude','GPS_Longitude']]
+            km = KMeans(n_clusters=n_zones, verbose=1).fit(rental.loc[:,['Start_GPS_Latitude','Start_GPS_Longitude']])
+            areas = pd.DataFrame(km.cluster_centers_, columns=['GPS_Latitude','GPS_Longitude'])
+            areas.index = ['virtual_zone_'+str(label) for label in areas.index]
+            rental['Virtual_Start_Zone_Name'] = ['virtual_zone_'+str(label) for label in km.labels_]
+            rental['Virtual_End_Zone_Name'] = ['virtual_zone_'+str(label) for label in km.predict(rental.loc[:,['End_GPS_Latitude','End_GPS_Longitude']])]
 
             rental.to_csv(Path.cwd() / 'data' / 'interim' / 'rental.csv', index=False)
-            area_centers.to_csv(Path.cwd() / 'data' / 'interim' / 'areas.csv', index=False)
-        else:
+            areas.to_csv(Path.cwd() / 'data' / 'interim' / 'areas.csv')
+
+
+        if not ((Path.cwd() / 'data' / 'interim' / 'openings.csv').is_file()):
             open_files = glob.glob(str(Path.cwd() / 'data' / 'raw' / open_folder / '*.csv'))
             open_dfs = [pd.read_csv(f) for f in open_files]
             openings = pd.concat(open_dfs,ignore_index=True)
@@ -203,6 +200,7 @@ class sarDataset(Dataset):
 
 if __name__ == "__main__":
     dm = DataModule()
+    dm.prepare_data()
     # data = sarDataset(np.arange(datetime(2020, 2, 1, 0, 56, 26), datetime(2020, 2, 1, 0, 56, 26), timedelta(hours=1)).astype(datetime))
     # s, a, s1, r = data[1000]
     # print('s:', s, '\n\n')
