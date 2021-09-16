@@ -55,6 +55,11 @@ class DataModule(pl.LightningDataModule):
 
     def prepare_data(self, n_zones:int=300, rental_folder:str='SN rentals', open_folder:str='SN App requests'):
         #TODO: Include data download.
+        #Limits of modelling
+        swlat=55.4355410101663
+        swlon=12.140848911388979
+        nelat=56.06417055142977
+        nelon=12.688363746232875
         #Takes raw files, concatenates them, selects useful columns and saved into a single file.
         if not ((Path.cwd() / 'data' / 'interim' / 'rental.csv').is_file() & 
                 (Path.cwd() / 'data' / 'interim' / 'areas.csv').is_file()):
@@ -71,6 +76,13 @@ class DataModule(pl.LightningDataModule):
             'End_GPS_Latitude', 'End_GPS_Longitude', 'Package_Description',
             'Operation_State_Name_Before', 'Operation_State_Name_After', 'Reservation_YN',
             'Prebooking_YN', 'Servicedrive_YN', 'Start_Zone_Name', 'End_Zone_Name']]
+            # Filter rentals outside of analysis zone
+            rental = rental[
+                (rental['Start_GPS_Latitude'] > swlat) & (rental['Start_GPS_Latitude'] < nelat) & 
+                (rental['Start_GPS_Longitude'] > swlon) & (rental['Start_GPS_Longitude'] > nelon)
+                (rental['End_GPS_Latitude'] > swlat) & (rental['End_GPS_Latitude'] < nelat) & 
+                (rental['End_GPS_Longitude'] > swlon) & (rental['End_GPS_Longitude'] > nelon)]
+
 
             # Virtual area creation with KMeans and assignment to all rentals
             km = KMeans(n_clusters=n_zones, verbose=1).fit(rental.loc[:,['Start_GPS_Latitude','Start_GPS_Longitude']])
@@ -89,6 +101,9 @@ class DataModule(pl.LightningDataModule):
             openings = pd.concat(open_dfs,ignore_index=True)
             openings = openings[openings['Source_Location_ID']!='Source_Location_ID']
             openings = openings.loc[:, ['Created_Datetime_Local', 'Platform', 'GPS_Longitude', 'GPS_Latitude']]
+            openings = openings[
+                (openings['GPS_Latitude'] > swlat) & (openings['GPS_Latitude'] < nelat) & 
+                (openings['GPS_Longitude'] > swlon) & (openings['GPS_Longitude'] > nelon)]
             openings.to_csv(Path.cwd() / 'data' / 'interim' / 'openings.csv', index=False)
 
 class sarDataset(Dataset):
@@ -111,7 +126,7 @@ class sarDataset(Dataset):
         self.load_data()        
 
     def load_data(self):
-        self.area_centers = pd.read_csv(Path.cwd() / 'data' / 'interim' / 'areas.csv')
+        self.area_centers = pd.read_csv(Path.cwd().parent / 'data' / 'interim' / 'areas.csv', index_col=0)
         self.area_centers.set_index('Area', inplace=True)
 
         self.openings = pd.read_csv(Path.cwd() / 'data' / 'interim' / 'openings.csv')
