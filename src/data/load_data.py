@@ -15,7 +15,7 @@ from pyproj import Geod
 
 class DataModule(pl.LightningDataModule):
     def __init__(self, batch_size:int=16, time_step:timedelta=timedelta(hours=1), 
-    time_start=datetime(2020, 2, 1, 0, 56, 26), time_end=datetime(2021, 5, 3, 23, 59, 55), seed:int=42, random_seed:bool=False):
+    time_start=datetime(2020, 2, 1, 0, 56, 26), time_end=datetime(2021, 5, 3, 23, 59, 55)):
         super().__init__()
 
         if not isinstance(batch_size, int):
@@ -27,10 +27,9 @@ class DataModule(pl.LightningDataModule):
         if not isinstance(time_end, datetime):
             raise TypeError("time_end is not datetime")
 
-        if not random_seed:
-            pl.seed_everything(seed=seed)
         self.batch_size=batch_size
         self.timepoints = np.arange(time_start, time_end, time_step).astype(datetime) # Link between indexes and datetimes
+        self.prepare_data()
 
     def setup(self, stage=None):
         #TODO: Include percentages as parameters.
@@ -79,7 +78,7 @@ class DataModule(pl.LightningDataModule):
             # Filter rentals outside of analysis zone
             rental = rental[
                 (rental['Start_GPS_Latitude'] > swlat) & (rental['Start_GPS_Latitude'] < nelat) & 
-                (rental['Start_GPS_Longitude'] > swlon) & (rental['Start_GPS_Longitude'] > nelon)
+                (rental['Start_GPS_Longitude'] > swlon) & (rental['Start_GPS_Longitude'] > nelon) &
                 (rental['End_GPS_Latitude'] > swlat) & (rental['End_GPS_Latitude'] < nelat) & 
                 (rental['End_GPS_Longitude'] > swlon) & (rental['End_GPS_Longitude'] > nelon)]
 
@@ -95,7 +94,7 @@ class DataModule(pl.LightningDataModule):
             areas.to_csv(Path.cwd() / 'data' / 'interim' / 'areas.csv')
 
 
-        if not ((Path.cwd() / 'data' / 'interim' / 'openings.csv').is_file()):
+        if not (Path.cwd() / 'data' / 'interim' / 'openings.csv').is_file():
             open_files = glob.glob(str(Path.cwd() / 'data' / 'raw' / open_folder / '*.csv'))
             open_dfs = [pd.read_csv(f) for f in open_files]
             openings = pd.concat(open_dfs,ignore_index=True)
@@ -215,7 +214,6 @@ class sarDataset(Dataset):
 
 if __name__ == "__main__":
     dm = DataModule()
-    dm.prepare_data()
     # data = sarDataset(np.arange(datetime(2020, 2, 1, 0, 56, 26), datetime(2020, 2, 1, 0, 56, 26), timedelta(hours=1)).astype(datetime))
     # s, a, s1, r = data[1000]
     # print('s:', s, '\n\n')
