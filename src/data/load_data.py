@@ -7,9 +7,11 @@ import numpy as np
 import pandas as pd
 import pytorch_lightning as pl
 from torch.utils.data import DataLoader, Dataset
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta
 from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
 from pyproj import Geod
+from tqdm import tqdm
 
 #TODO: Check action times and regulate time_window and timepoint_delta
 
@@ -29,7 +31,6 @@ class DataModule(pl.LightningDataModule):
 
         self.batch_size=batch_size
         self.timepoints = np.arange(time_start, time_end, time_step).astype(datetime) # Link between indexes and datetimes
-        self.prepare_data()
 
     def setup(self, stage=None):
         #TODO: Include percentages as parameters.
@@ -52,7 +53,7 @@ class DataModule(pl.LightningDataModule):
     def test_dataloader(self):
         return DataLoader(self.test_data, batch_size=self.batch_size)
 
-    def prepare_data(self, n_zones:int=300, rental_folder:str='SN rentals', open_folder:str='SN App requests'):
+    def prepare_data(self, n_zones:int=300, rental_folder:str='SN rentals', open_folder:str='SN App requests', optimise=False):
         #TODO: Include data download.
         #Limits of modelling
         swlat=55.4355410101663
@@ -60,8 +61,8 @@ class DataModule(pl.LightningDataModule):
         nelat=56.06417055142977
         nelon=12.688363746232875
         #Takes raw files, concatenates them, selects useful columns and saved into a single file.
-        if not ((Path.cwd() / 'data' / 'interim' / 'rental.csv').is_file() & 
-                (Path.cwd() / 'data' / 'interim' / 'areas.csv').is_file()):
+        if not ((Path.cwd() / 'data' / 'processed' / 'rental.csv').is_file() and 
+                (Path.cwd() / 'data' / 'processed' / 'areas.csv').is_file()):
             rent_files = glob.glob(str(Path.cwd() / 'data' / 'raw' / rental_folder / '*.xlsx'))
             rent_dfs = [pd.read_excel(f, skiprows=[0,1]) for f in rent_files]
             rental = pd.concat(rent_dfs,ignore_index=True)
@@ -78,23 +79,37 @@ class DataModule(pl.LightningDataModule):
             # Filter rentals outside of analysis zone
             rental = rental[
                 (rental['Start_GPS_Latitude'] > swlat) & (rental['Start_GPS_Latitude'] < nelat) & 
-                (rental['Start_GPS_Longitude'] > swlon) & (rental['Start_GPS_Longitude'] > nelon) &
+                (rental['Start_GPS_Longitude'] > swlon) & (rental['Start_GPS_Longitude'] < nelon) &
                 (rental['End_GPS_Latitude'] > swlat) & (rental['End_GPS_Latitude'] < nelat) & 
-                (rental['End_GPS_Longitude'] > swlon) & (rental['End_GPS_Longitude'] > nelon)]
-
+                (rental['End_GPS_Longitude'] > swlon) & (rental['End_GPS_Longitude'] < nelon)]
 
             # Virtual area creation with KMeans and assignment to all rentals
+            if optimise:
+                print('Finding optimal amount of virtual zones')
+                X = rental.loc[:,['Start_GPS_Latitude','Start_GPS_Longitude']].sample(frac=0.05) # Using only a fraction of rental to train quicker
+                scores = []
+                n_original_areas = len(pd.unique(rental['Start_Zone_Name']))
+                for n in tqdm(range(n_original_areas, 2*n_original_areas, int(n_original_areas/20))):
+                    km = KMeans(n_clusters=n).fit(X)
+                    scores.append([n, silhouette_score(X, km.labels_)])
+                scores = np.array(scores)
+                n_zones = int(scores[scores[:,1].argmax(),0]) # Pick n_zones with highes silhouette_score
+                print(scores)
+            else:
+                n_zones = 300
+
+            # Determine the correct zones using the whole dataset
             km = KMeans(n_clusters=n_zones, verbose=1).fit(rental.loc[:,['Start_GPS_Latitude','Start_GPS_Longitude']])
             areas = pd.DataFrame(km.cluster_centers_, columns=['GPS_Latitude','GPS_Longitude'])
             areas.index = ['virtual_zone_'+str(label) for label in areas.index]
             rental['Virtual_Start_Zone_Name'] = ['virtual_zone_'+str(label) for label in km.labels_]
             rental['Virtual_End_Zone_Name'] = ['virtual_zone_'+str(label) for label in km.predict(rental.loc[:,['End_GPS_Latitude','End_GPS_Longitude']])]
 
-            rental.to_csv(Path.cwd() / 'data' / 'interim' / 'rental.csv', index=False)
-            areas.to_csv(Path.cwd() / 'data' / 'interim' / 'areas.csv')
+            rental.to_csv(Path.cwd() / 'data' / 'processed' / 'rental.csv', index=False)
+            areas.to_csv(Path.cwd() / 'data' / 'processed' / 'areas.csv')
 
 
-        if not (Path.cwd() / 'data' / 'interim' / 'openings.csv').is_file():
+        if not (Path.cwd() / 'data' / 'processed' / 'openings.csv').is_file():
             open_files = glob.glob(str(Path.cwd() / 'data' / 'raw' / open_folder / '*.csv'))
             open_dfs = [pd.read_csv(f) for f in open_files]
             openings = pd.concat(open_dfs,ignore_index=True)
@@ -102,8 +117,8 @@ class DataModule(pl.LightningDataModule):
             openings = openings.loc[:, ['Created_Datetime_Local', 'Platform', 'GPS_Longitude', 'GPS_Latitude']]
             openings = openings[
                 (openings['GPS_Latitude'] > swlat) & (openings['GPS_Latitude'] < nelat) & 
-                (openings['GPS_Longitude'] > swlon) & (openings['GPS_Longitude'] > nelon)]
-            openings.to_csv(Path.cwd() / 'data' / 'interim' / 'openings.csv', index=False)
+                (openings['GPS_Longitude'] > swlon) & (openings['GPS_Longitude'] < nelon)]
+            openings.to_csv(Path.cwd() / 'data' / 'processed' / 'openings.csv', index=False)
 
 class sarDataset(Dataset):
     def __init__(self, timepoints, time_window:timedelta=timedelta(hours=1)):
@@ -125,14 +140,14 @@ class sarDataset(Dataset):
         self.load_data()        
 
     def load_data(self):
-        self.area_centers = pd.read_csv(Path.cwd().parent / 'data' / 'interim' / 'areas.csv', index_col=0)
+        self.area_centers = pd.read_csv(Path.cwd().parent / 'data' / 'processed' / 'areas.csv', index_col=0)
         self.area_centers.set_index('Area', inplace=True)
 
-        self.openings = pd.read_csv(Path.cwd() / 'data' / 'interim' / 'openings.csv')
+        self.openings = pd.read_csv(Path.cwd() / 'data' / 'processed' / 'openings.csv')
         self.openings['Created_Datetime_Local'] = pd.to_datetime(self.openings['Created_Datetime_Local'], format='%Y-%m-%d %H:%M')
         self.openings = pd.get_dummies(self.openings, columns=['Platform'], drop_first=True)
     
-        self.rental = pd.read_csv((Path.cwd() / 'data' / 'interim' / 'rental.csv'), low_memory=False)
+        self.rental = pd.read_csv((Path.cwd() / 'data' / 'processed' / 'rental.csv'), low_memory=False)
         self.rental['Start_Datetime_Local'] = pd.to_datetime(self.rental['Start_Datetime_Local'], format='%Y-%m-%d %H:%M')
         self.rental['End_Datetime_Local'] = pd.to_datetime(self.rental['End_Datetime_Local'], format='%Y-%m-%d %H:%M')
         self.rental = pd.get_dummies(self.rental, columns=['Vehicle_Engine_Type'], drop_first=True)
@@ -214,6 +229,7 @@ class sarDataset(Dataset):
 
 if __name__ == "__main__":
     dm = DataModule()
+    dm.prepare_data(optimise=True)
     # data = sarDataset(np.arange(datetime(2020, 2, 1, 0, 56, 26), datetime(2020, 2, 1, 0, 56, 26), timedelta(hours=1)).astype(datetime))
     # s, a, s1, r = data[1000]
     # print('s:', s, '\n\n')
