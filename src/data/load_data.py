@@ -89,12 +89,12 @@ class DataModule(pl.LightningDataModule):
                 X = rental.loc[:,['Start_GPS_Latitude','Start_GPS_Longitude']].sample(frac=0.05) # Using only a fraction of rental to train quicker
                 scores = []
                 n_original_areas = len(pd.unique(rental['Start_Zone_Name']))
-                for n in tqdm(range(n_original_areas, 2*n_original_areas, int(n_original_areas/20))):
+                for n in tqdm(range(n_original_areas, 2*n_original_areas, int(n_original_areas/100))):
                     km = KMeans(n_clusters=n).fit(X)
                     scores.append([n, silhouette_score(X, km.labels_)])
-                scores = np.array(scores)
+                scores = pd.DataFrame(scores)
                 n_zones = int(scores[scores[:,1].argmax(),0]) # Pick n_zones with highes silhouette_score
-                print(scores)
+                scores.to_csv(Path.cwd() / 'reports' /'virtual_area_opt.csv', index=False)
             else:
                 n_zones = 300
 
