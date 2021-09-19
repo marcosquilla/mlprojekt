@@ -55,12 +55,12 @@ class DataModule(pl.LightningDataModule):
 
     def prepare_data(self, n_zones:int=300, rental_folder:str='SN rentals', open_folder:str='SN App requests', optimise=False):
         #TODO: Include data download.
-        #Limits of modelling
+        # Limits of modelling
         swlat=55.4355410101663
         swlon=12.140848911388979
         nelat=56.06417055142977
         nelon=12.688363746232875
-        #Takes raw files, concatenates them, selects useful columns and saved into a single file.
+        # Takes raw files, concatenates them, selects useful columns and saved into a single file.
         if not ((Path.cwd() / 'data' / 'processed' / 'rental.csv').is_file() and 
                 (Path.cwd() / 'data' / 'processed' / 'areas.csv').is_file()):
             rent_files = glob.glob(str(Path.cwd() / 'data' / 'raw' / rental_folder / '*.xlsx'))
@@ -89,14 +89,15 @@ class DataModule(pl.LightningDataModule):
                 X = rental.loc[:,['Start_GPS_Latitude','Start_GPS_Longitude']].sample(frac=0.05) # Using only a fraction of rental to train quicker
                 scores = []
                 n_original_areas = len(pd.unique(rental['Start_Zone_Name']))
-                for n in tqdm(range(n_original_areas, 2*n_original_areas, int(n_original_areas/100))):
+                for n in tqdm(range(n_original_areas, 4*n_original_areas, int(n_original_areas/50))):
                     km = KMeans(n_clusters=n).fit(X)
                     scores.append([n, silhouette_score(X, km.labels_)])
                 scores = pd.DataFrame(scores)
-                n_zones = int(scores[scores[:,1].argmax(),0]) # Pick n_zones with highes silhouette_score
+                n_zones = int(scores.iloc[scores.iloc[:,1].argmax(),0]) # Pick n_zones with highes silhouette_score
                 scores.to_csv(Path.cwd() / 'reports' /'virtual_area_opt.csv', index=False)
             else:
-                n_zones = 300
+                scores = pd.read_csv(Path.cwd() / 'reports' /'virtual_area_opt.csv')
+                n_zones = int(scores.iloc[scores.iloc[:,1].argmax(),0])
 
             # Determine the correct zones using the whole dataset
             km = KMeans(n_clusters=n_zones, verbose=1).fit(rental.loc[:,['Start_GPS_Latitude','Start_GPS_Longitude']])
