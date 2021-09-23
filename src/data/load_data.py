@@ -96,9 +96,9 @@ class DataModule(pl.LightningDataModule):
                 n_zones = int(scores.iloc[scores.iloc[:,1].argmax(),0]) # Pick n_zones with highes silhouette_score
                 scores.to_csv(Path.cwd() / 'reports' /'virtual_area_opt.csv', index=False)
             else:
-                #scores = pd.read_csv(Path.cwd() / 'reports' / 'virtual_area_opt.csv', index_col='0')
-                #n_zones = int(scores.iloc[np.argmax(scores)].name)
-                n_zones = 350
+                scores = pd.read_csv(Path.cwd() / 'reports' / 'virtual_area_opt.csv', index_col='0')
+                n_zones = int(scores.iloc[np.argmax(scores)].name)
+                n_zones = 450
 
             # Determine the correct zones using the whole dataset
             km = KMeans(n_clusters=n_zones, verbose=1).fit(rental.loc[:,['Start_GPS_Latitude','Start_GPS_Longitude']])
@@ -231,7 +231,7 @@ class sarDataset(Dataset):
 
 if __name__ == "__main__":
     dm = DataModule()
-    dm.prepare_data(optimise=True)
+    dm.prepare_data(optimise=False)
     # data = sarDataset(np.arange(datetime(2020, 2, 1, 0, 56, 26), datetime(2020, 2, 1, 0, 56, 26), timedelta(hours=1)).astype(datetime))
     # s, a, s1, r = data[1000]
     # print('s:', s, '\n\n')
