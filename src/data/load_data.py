@@ -63,25 +63,29 @@ class DataModule(pl.LightningDataModule):
         # Takes raw files, concatenates them, selects useful columns and saved into a single file.
         if not ((Path.cwd() / 'data' / 'processed' / 'rental.csv').is_file() and 
                 (Path.cwd() / 'data' / 'processed' / 'areas.csv').is_file()):
-            rent_files = glob.glob(str(Path.cwd() / 'data' / 'raw' / rental_folder / '*.xlsx'))
-            rent_dfs = [pd.read_excel(f, skiprows=[0,1]) for f in rent_files]
-            rental = pd.concat(rent_dfs,ignore_index=True)
-            rental = rental[rental['[Partner_Rental_ID]']!='[Partner_Rental_ID]']
-            rental.columns = rental.columns.str.replace("[","", regex=False)
-            rental.columns = rental.columns.str.replace("]","", regex=False)
-            rental = rental.loc[:, ['Vehicle_Number_Plate', 'Vehicle_Engine_Type',
-            'Vehicle_Model', 'Revenue_Net',
-            'Start_Datetime_Local', 'End_Datetime_Local',
-            'Start_GPS_Latitude', 'Start_GPS_Longitude',
-            'End_GPS_Latitude', 'End_GPS_Longitude', 'Package_Description',
-            'Operation_State_Name_Before', 'Operation_State_Name_After', 'Reservation_YN',
-            'Prebooking_YN', 'Servicedrive_YN', 'Start_Zone_Name', 'End_Zone_Name']]
-            # Filter rentals outside of analysis zone
-            rental = rental[
-                (rental['Start_GPS_Latitude'] > swlat) & (rental['Start_GPS_Latitude'] < nelat) & 
-                (rental['Start_GPS_Longitude'] > swlon) & (rental['Start_GPS_Longitude'] < nelon) &
-                (rental['End_GPS_Latitude'] > swlat) & (rental['End_GPS_Latitude'] < nelat) & 
-                (rental['End_GPS_Longitude'] > swlon) & (rental['End_GPS_Longitude'] < nelon)]
+            if not (Path.cwd() / 'data' / 'interim' / 'rental.csv').is_file():
+                rent_files = glob.glob(str(Path.cwd() / 'data' / 'raw' / rental_folder / '*.xlsx'))
+                rent_dfs = [pd.read_excel(f, skiprows=[0,1]) for f in rent_files]
+                rental = pd.concat(rent_dfs,ignore_index=True)
+                rental = rental[rental['[Partner_Rental_ID]']!='[Partner_Rental_ID]']
+                rental.columns = rental.columns.str.replace("[","", regex=False)
+                rental.columns = rental.columns.str.replace("]","", regex=False)
+                rental = rental.loc[:, ['Vehicle_Number_Plate', 'Vehicle_Engine_Type',
+                'Vehicle_Model', 'Revenue_Net',
+                'Start_Datetime_Local', 'End_Datetime_Local',
+                'Start_GPS_Latitude', 'Start_GPS_Longitude',
+                'End_GPS_Latitude', 'End_GPS_Longitude', 'Package_Description',
+                'Operation_State_Name_Before', 'Operation_State_Name_After', 'Reservation_YN',
+                'Prebooking_YN', 'Servicedrive_YN', 'Start_Zone_Name', 'End_Zone_Name']]
+                # Filter rentals outside of analysis zone
+                rental = rental[
+                    (rental['Start_GPS_Latitude'] > swlat) & (rental['Start_GPS_Latitude'] < nelat) & 
+                    (rental['Start_GPS_Longitude'] > swlon) & (rental['Start_GPS_Longitude'] < nelon) &
+                    (rental['End_GPS_Latitude'] > swlat) & (rental['End_GPS_Latitude'] < nelat) & 
+                    (rental['End_GPS_Longitude'] > swlon) & (rental['End_GPS_Longitude'] < nelon)]
+                rental.to_csv(Path.cwd() / 'data' / 'interim' / 'rental.csv', index=False)
+            else:
+                rental = pd.read_csv((Path.cwd() / 'data' / 'interim' / 'rental.csv'), low_memory=False)
 
             # Virtual area creation with KMeans and assignment to all rentals
             if optimise:
