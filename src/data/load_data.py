@@ -53,7 +53,7 @@ class DataModule(pl.LightningDataModule):
     def test_dataloader(self):
         return DataLoader(self.test_data, batch_size=self.batch_size)
 
-    def prepare_data(self, n_zones:int=300, rental_folder:str='SN rentals', open_folder:str='SN App requests', optimise=False):
+    def prepare_data(self, rental_folder:str='SN rentals', open_folder:str='SN App requests', optimise=False):
         #TODO: Include data download.
         # Limits of modelling
         swlat=55.4355410101663
