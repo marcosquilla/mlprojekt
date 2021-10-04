@@ -55,7 +55,7 @@ class DataModule(pl.LightningDataModule):
     def test_dataloader(self):
         return DataLoader(self.test_data, batch_size=self.batch_size)
 
-    def prepare_data(self, rental_folder:str='SN rentals', open_folder:str='SN App requests', optimise=False):
+    def prepare_data(self, rental_folder:str='SN rentals', open_folder:str='SN App requests', optimise=False, opt_zones=False, n_zones=50):
         #TODO: Include data download.
         # Limits of modelling
         swlat=55.4355410101663
@@ -101,9 +101,11 @@ class DataModule(pl.LightningDataModule):
                 n_zones = int(scores.iloc[scores.iloc[:,1].argmax(),0]) # Pick n_zones with highes silhouette_score
                 scores.to_csv(Path('.') / 'reports' /'virtual_area_opt.csv', index=False)
             else:
-                scores = pd.read_csv(Path('.') / 'reports' / 'virtual_area_opt.csv', index_col='0')
-                n_zones = int(scores.iloc[np.argmax(scores)].name)
-                n_zones = 50
+                if opt_zones:
+                    scores = pd.read_csv(Path('.') / 'reports' / 'virtual_area_opt.csv', index_col='0')
+                    n_zones = int(scores.iloc[np.argmax(scores)].name)
+                else:
+                    n_zones = n_zones
 
             # Determine the correct zones using the whole dataset
             km = KMeans(n_clusters=n_zones, verbose=1).fit(rental.loc[:,['Start_GPS_Latitude','Start_GPS_Longitude']])
@@ -241,7 +243,7 @@ class sarDataset(Dataset):
 
 if __name__ == "__main__":
     dm = DataModule()
-    dm.prepare_data(optimise=False)
+    dm.prepare_data(optimise=False, opt_zones=False, n_zones=50)
     # data = sarDataset(np.arange(datetime(2020, 2, 1, 0, 56, 26), datetime(2020, 2, 1, 0, 56, 26), timedelta(hours=1)).astype(datetime))
     # s, a, s1, r = data[1000]
     # print('s:', s, '\n\n')
