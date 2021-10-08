@@ -1,11 +1,11 @@
 # pylint: disable=E1101
 
 from pathlib import Path
-from copy import deepcopy
 import glob
 import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
+import torch
 import pytorch_lightning as pl
 from torch.utils.data import DataLoader, Dataset
 from sklearn.model_selection import train_test_split
@@ -18,7 +18,7 @@ from tqdm import tqdm
 #TODO: Check action times and regulate time_window and timepoint_delta
 
 class DataModule(pl.LightningDataModule):
-    def __init__(self, batch_size:int=16, time_step:timedelta=timedelta(hours=1), 
+    def __init__(self, batch_size:int=16, time_step:timedelta=timedelta(minutes=30), time_window:timedelta=timedelta(minutes=30),
     time_start=datetime(2020, 2, 1, 0, 56, 26), time_end=datetime(2021, 5, 3, 23, 59, 55), 
     test_size=0.2, val_size=0, shuffle_time=False):
         super().__init__()
@@ -32,7 +32,8 @@ class DataModule(pl.LightningDataModule):
         if not isinstance(time_end, datetime):
             raise TypeError("time_end is not datetime")
 
-        self.batch_size=batch_size
+        self.batch_size = batch_size
+        self.time_window = time_window
         self.timepoints = np.arange(time_start, time_end, time_step).astype(datetime) # Link between indexes and datetimes
         self.train_idx, self.test_idx = train_test_split(self.timepoints, test_size=test_size, shuffle=shuffle_time)
         if val_size>0:
@@ -40,11 +41,11 @@ class DataModule(pl.LightningDataModule):
 
     def setup(self, stage=None):
         if stage in (None, "fit"):
-            self.train_data = sarDataset(self.train_idx)
+            self.train_data = sarDataset(self.train_idx, time_window=self.time_window)
         if stage in (None, "validate"):
-            self.val_data = sarDataset(self.val_idx)
+            self.val_data = sarDataset(self.val_idx, time_window=self.time_window)
         if stage in (None, "test"):
-            self.test_data = sarDataset(self.test_idx)
+            self.test_data = sarDataset(self.test_idx, time_window=self.time_window)
         
     def train_dataloader(self):
         return DataLoader(self.train_data, batch_size=self.batch_size)
@@ -129,7 +130,7 @@ class DataModule(pl.LightningDataModule):
             openings.to_csv(Path('.') / 'data' / 'processed' / 'openings.csv', index=False)
 
 class sarDataset(Dataset):
-    def __init__(self, timepoints, time_window:timedelta=timedelta(hours=1)):
+    def __init__(self, timepoints, time_window:timedelta, n_actions:int=5):
 
         if not isinstance(timepoints, (list, tuple, set, np.ndarray, pd.Series)):
             raise TypeError("timepoints is not list-like")
@@ -139,6 +140,7 @@ class sarDataset(Dataset):
             raise TypeError("time_window is not timedelta")
         
         self.timepoint = timepoints
+        self.n_actions = n_actions
 
         self.time_window = time_window
         self.wgs84_geod = Geod(ellps='WGS84') # Distance will be measured in meters on this ellipsoid - more accurate than a spherical method
@@ -159,40 +161,40 @@ class sarDataset(Dataset):
         self.rental['End_Datetime_Local'] = pd.to_datetime(self.rental['End_Datetime_Local'], format='%Y-%m-%d %H:%M')
         self.rental = pd.get_dummies(self.rental, columns=['Vehicle_Engine_Type'], drop_first=True)
         self.rental = pd.get_dummies(self.rental, columns=['Vehicle_Model'])
+        one_hot_zones = pd.get_dummies(self.rental.loc[:,['Virtual_Start_Zone_Name', 'Virtual_End_Zone_Name']], columns=['Virtual_Start_Zone_Name', 'Virtual_End_Zone_Name'])
+        self.rental = pd.concat([self.rental, one_hot_zones], axis=1)
         
         self.vehicles = self.rental.columns[self.rental.columns.str.contains('Vehicle_Model')] # Get names of vehicles
         o2d = [c[0]+c[1] for c in list(combinations(self.area_centers.index.values.astype('str'), 2))]
         self.o2dv = [c[0]+c[1] for c in list(product(o2d, self.vehicles.values))] # All possible combinations of start, end zones and vehicles for action space
-        print('Data load finished')
 
     def distance(self,lat1,lon1,lat2,lon2):
         # Auxiliary method for coords_to_areas. Calculates a distance between 2 coordinates
         _,_,dist = self.wgs84_geod.inv(lon1,lat1,lon2,lat2)
         return dist
 
-    def coords_to_areas(self, target: pd.Series):
+    def coords_to_areas(self, target):
         # Auxiliary method for demand. Calculate to which area an opening's coordinates (target) "belong to".
-        # Following 3 lines needed to have a Series of the same length as area_centers with target as value
-        dist = deepcopy(self.area_centers) # Without deepcopy area_centers is modified in the next 2 lines
-        dist['TGPS_Latitude'] = target['GPS_Latitude']
-        dist['TGPS_Longitude'] = target['GPS_Longitude']
-        
-        dists = self.distance(dist['GPS_Latitude'], dist['GPS_Longitude'], dist['TGPS_Latitude'], dist['TGPS_Longitude'])
-        return pd.Series(1 - dists / sum(dists)) # Percentage of how much an opening belongs to each area
+        dists = self.distance(
+            self.area_centers['GPS_Latitude'], self.area_centers['GPS_Longitude'],
+            np.full(len(self.area_centers),target['GPS_Latitude']), np.full(len(self.area_centers),target['GPS_Longitude']))
+        return pd.Series(1 - dists / sum(dists)) / (len(dists) - 1) # Percentage of how much an opening belongs to each area
         
     def demand(self, idx):
         # Auxiliary method for __getitem__. Uses array timepoint as a index. Returns the demand of all areas at some point in time.
         dem = self.openings[(self.openings['Created_Datetime_Local'] > self.timepoint[idx]-self.time_window) &
         (self.openings['Created_Datetime_Local'] <= self.timepoint[idx])]
-        dem[self.area_centers.index.values] = 0 # Create columns with area names
-        dem[self.area_centers.index.values] = dem.apply(lambda x: self.coords_to_areas(x), axis=1) # Apply function to all openings
-        return dem.sum(axis=0).loc[self.area_centers.index].to_numpy() # Aggregate demand in the time window over areas (.loc to remove gps coords and platform). Sum of demand equals to amount of app openings
+        if len(dem) == 0:
+            return torch.zeros(len(self.area_centers))
+        else:
+            dem[self.area_centers.index.values] = 0 # Create columns with area names
+            dem[self.area_centers.index.values] = dem.apply(lambda x: self.coords_to_areas(x), axis=1) # Apply function to all openings
+            return torch.tensor(dem.sum(axis=0).loc[self.area_centers.index].values) # Aggregate demand in the time window over areas (.loc to remove gps coords and platform). Sum of demand equals to amount of app openings
     
     def vehicle_locations(self, idx):
         # Auxiliary method for __getitem__. Uses array timepoint as a index.
-        # TODO: Optimise sort (or try to remove it)
-        loc = self.rental[self.rental['End_Datetime_Local'] <= self.timepoint[idx]].drop('Revenue_Net', axis=1)
-        loc = loc.sort_values(by='End_Datetime_Local').drop_duplicates(subset='Vehicle_Number_Plate', keep='last') # Keep the last location
+        loc = self.rental[self.rental['End_Datetime_Local'] <= self.timepoint[idx]]
+        loc = loc.drop_duplicates(subset='Vehicle_Number_Plate', keep='last') # Keep the last location
         current_trips = self.rental[(self.rental['Start_Datetime_Local'] <= self.timepoint[idx]) & (self.rental['End_Datetime_Local'] > self.timepoint[idx])] # Cars in use
         loc = loc[~loc['Vehicle_Number_Plate'].isin(current_trips['Vehicle_Number_Plate'])] # Filter out cars in use
         loc = loc.loc[:, ~loc.columns.str.contains('Start')].drop(columns=['End_Datetime_Local'], axis=1) # Drop unused columns
@@ -200,35 +202,29 @@ class sarDataset(Dataset):
         missing_areas = pd.DataFrame(index=self.area_centers.index[~self.area_centers.index.isin(loc.index)], columns=loc.columns, data=0)
         loc = pd.melt(pd.concat([loc, missing_areas]), ignore_index=False) # Add missing areas and unpivot
         loc.index = loc.index.astype('str') + loc.variable # Join zone and vehicle model, necessary to sort
-        return loc.drop(labels='variable', axis=1).sort_index().to_numpy().squeeze() # Drop vehicle model (already in index) and sort
+        return torch.tensor(loc.drop(labels='variable', axis=1).sort_index().values).squeeze() # Drop vehicle model (already in index) and sort
 
     def state(self, idx):
         # Auxiliary method for __getitem__. Joins vehicle locations and demand
         dem = self.demand(idx)
         loc = self.vehicle_locations(idx)
-        return np.hstack((dem, loc))
+        return torch.hstack((dem, loc))
 
     def actions(self, idx):
         # Auxiliary method for __getitem__. Calculates actions
-        a = self.rental[(self.rental['Servicedrive_YN']==1) &
+        ad = self.rental[(self.rental['Servicedrive_YN']==1) &
                         (self.rental['Start_Datetime_Local'] >= self.timepoint[idx]-self.time_window) &
                         (self.rental['End_Datetime_Local'] < self.timepoint[idx])]
-        a = a[a['Virtual_Start_Zone_Name'] != a['Virtual_End_Zone_Name']]
-        a = a.loc[:, [*self.vehicles, 'Virtual_Start_Zone_Name', 'Virtual_End_Zone_Name', 'Servicedrive_YN']]
-        a = pd.melt(a, id_vars=['Virtual_Start_Zone_Name', 'Virtual_End_Zone_Name'], value_vars=[*self.vehicles])
-        a = a[a.value>0]
-        # Following 3 lines order make it such as the Start Zone is always smaller than End Zone (to later merge with o2dv)
-        a.sort_values(by=['Virtual_Start_Zone_Name','Virtual_End_Zone_Name'], inplace=True)
-        a.loc[a['Virtual_Start_Zone_Name']>a['Virtual_End_Zone_Name'], ['value']] = a.loc[a['Virtual_Start_Zone_Name']>a['Virtual_End_Zone_Name'], ['value']].values*-1
-        a.loc[a['Virtual_Start_Zone_Name']>a['Virtual_End_Zone_Name'],['Virtual_Start_Zone_Name', 'Virtual_End_Zone_Name']] = a.loc[a['Virtual_Start_Zone_Name']>a['Virtual_End_Zone_Name'],['Virtual_End_Zone_Name', 'Virtual_Start_Zone_Name']].values
-        a.index=a.iloc[:,0].astype('str')+a.iloc[:,1].astype('str')+a.iloc[:,2]
-        a = a.drop(['Virtual_Start_Zone_Name', 'Virtual_End_Zone_Name', 'variable'], axis=1).groupby(level=0).sum() # Deletes cancelling actions
-        return pd.DataFrame(data=0, index=self.o2dv, columns=['value']).add(a, axis=0, fill_value=0).to_numpy().squeeze()
+        ad = ad[ad['Virtual_Start_Zone_Name'] != ad['Virtual_End_Zone_Name']].iloc[:,19:]
+        ad = np.reshape(ad.to_numpy(), (-1, ad.shape[1]))[:self.n_actions]
+        a = np.zeros((self.n_actions, ad.shape[1]))
+        a[:ad.shape[0]] = ad
+        return torch.from_numpy(a)
 
     def revenue(self, idx):
         # Auxiliary method for __getitem__. Uses array timepoint as a index.
         trips_in_window = self.rental[(self.rental['Start_Datetime_Local'] >= self.timepoint[idx]-self.time_window) & (self.rental['End_Datetime_Local'] < self.timepoint[idx])]
-        return trips_in_window['Revenue_Net'].sum()
+        return torch.tensor(trips_in_window['Revenue_Net'].sum())
 
     def __len__(self):
         return len(self.timepoint)
@@ -238,7 +234,6 @@ class sarDataset(Dataset):
         a = self.actions(idx) # Returns end position of cars due to service trips within idx-timedelta (only moved cars)
         s1 = self.state(idx+1) # Returns position of cars in timepoint idx+1 and demand between idx+1-timedelta and idx+1
         r = self.revenue(idx) # Returns total revenue between idx-timedelta and idx
-        print(idx, len(a))
         return s, a, s1, r
 
 if __name__ == "__main__":
