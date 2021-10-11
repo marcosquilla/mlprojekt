@@ -20,7 +20,7 @@ from tqdm import tqdm
 class DataModule(pl.LightningDataModule):
     def __init__(self, batch_size:int=16, time_step:timedelta=timedelta(minutes=30), time_window:timedelta=timedelta(minutes=30),
     time_start=datetime(2020, 2, 1, 0, 56, 26), time_end=datetime(2021, 5, 3, 23, 59, 55), 
-    test_size=0.2, val_size=0, shuffle_time=False):
+    test_size=0.2, val_size=0, shuffle_time=False, num_workers=0):
         super().__init__()
 
         if not isinstance(batch_size, int):
@@ -32,6 +32,7 @@ class DataModule(pl.LightningDataModule):
         if not isinstance(time_end, datetime):
             raise TypeError("time_end is not datetime")
 
+        self.num_workers = num_workers
         self.batch_size = batch_size
         self.time_window = time_window
         self.timepoints = np.arange(time_start, time_end, time_step).astype(datetime) # Link between indexes and datetimes
@@ -48,13 +49,13 @@ class DataModule(pl.LightningDataModule):
             self.test_data = sarDataset(self.test_idx, time_window=self.time_window)
         
     def train_dataloader(self):
-        return DataLoader(self.train_data, batch_size=self.batch_size)
+        return DataLoader(self.train_data, batch_size=self.batch_size, num_workers=self.num_workers)
 
     def val_dataloader(self):
-        return DataLoader(self.val_data, batch_size=self.batch_size)
+        return DataLoader(self.val_data, batch_size=self.batch_size, num_workers=self.num_workers)
     
     def test_dataloader(self):
-        return DataLoader(self.test_data, batch_size=self.batch_size)
+        return DataLoader(self.test_data, batch_size=self.batch_size, num_workers=self.num_workers)
 
     def prepare_data(self, rental_folder:str='SN rentals', open_folder:str='SN App requests', optimise=False, opt_zones=False, n_zones=50):
         #TODO: Include data download.
@@ -111,8 +112,8 @@ class DataModule(pl.LightningDataModule):
             # Determine the correct zones using the whole dataset
             km = KMeans(n_clusters=n_zones, verbose=1).fit(rental.loc[:,['Start_GPS_Latitude','Start_GPS_Longitude']])
             areas = pd.DataFrame(km.cluster_centers_, columns=['GPS_Latitude','GPS_Longitude'])
-            rental['Virtual_Start_Zone_Name'] = km.labels_
-            rental['Virtual_End_Zone_Name'] = [label for label in km.predict(rental.loc[:,['End_GPS_Latitude','End_GPS_Longitude']])]
+            rental.loc[:,'Virtual_Start_Zone_Name'] = km.labels_
+            rental.loc[:,'Virtual_End_Zone_Name'] = [label for label in km.predict(rental.loc[:,['End_GPS_Latitude','End_GPS_Longitude']])]
 
             rental.to_csv(Path('.') / 'data' / 'processed' / 'rental.csv', index=False)
             areas.to_csv(Path('.') / 'data' / 'processed' / 'areas.csv')
@@ -144,8 +145,6 @@ class sarDataset(Dataset):
 
         self.time_window = time_window
         self.wgs84_geod = Geod(ellps='WGS84') # Distance will be measured in meters on this ellipsoid - more accurate than a spherical method
-        
-        pd.options.mode.chained_assignment = None
 
         self.load_data()        
 
@@ -153,20 +152,18 @@ class sarDataset(Dataset):
         self.area_centers = pd.read_csv((Path('.') / 'data' / 'processed' / 'areas.csv'), index_col=0)
 
         self.openings = pd.read_csv((Path('.') / 'data' / 'processed' / 'openings.csv'))
-        self.openings['Created_Datetime_Local'] = pd.to_datetime(self.openings['Created_Datetime_Local'], format='%Y-%m-%d %H:%M')
+        self.openings.loc[:,'Created_Datetime_Local'] = pd.to_datetime(self.openings['Created_Datetime_Local'], format='%Y-%m-%d %H:%M')
         self.openings = pd.get_dummies(self.openings, columns=['Platform'], drop_first=True)
     
         self.rental = pd.read_csv((Path('.') / 'data' / 'processed' / 'rental.csv'), low_memory=False)
-        self.rental['Start_Datetime_Local'] = pd.to_datetime(self.rental['Start_Datetime_Local'], format='%Y-%m-%d %H:%M')
-        self.rental['End_Datetime_Local'] = pd.to_datetime(self.rental['End_Datetime_Local'], format='%Y-%m-%d %H:%M')
+        self.rental.loc[:,'Start_Datetime_Local'] = pd.to_datetime(self.rental['Start_Datetime_Local'], format='%Y-%m-%d %H:%M')
+        self.rental.loc[:,'End_Datetime_Local'] = pd.to_datetime(self.rental['End_Datetime_Local'], format='%Y-%m-%d %H:%M')
         self.rental = pd.get_dummies(self.rental, columns=['Vehicle_Engine_Type'], drop_first=True)
         self.rental = pd.get_dummies(self.rental, columns=['Vehicle_Model'])
         one_hot_zones = pd.get_dummies(self.rental.loc[:,['Virtual_Start_Zone_Name', 'Virtual_End_Zone_Name']], columns=['Virtual_Start_Zone_Name', 'Virtual_End_Zone_Name'])
         self.rental = pd.concat([self.rental, one_hot_zones], axis=1)
         
         self.vehicles = self.rental.columns[self.rental.columns.str.contains('Vehicle_Model')] # Get names of vehicles
-        o2d = [c[0]+c[1] for c in list(combinations(self.area_centers.index.values.astype('str'), 2))]
-        self.o2dv = [c[0]+c[1] for c in list(product(o2d, self.vehicles.values))] # All possible combinations of start, end zones and vehicles for action space
 
     def coords_to_areas(self, target):
         # Auxiliary method for demand. Calculate to which area an opening's coordinates (target) "belong to".
@@ -182,8 +179,8 @@ class sarDataset(Dataset):
         if len(dem) == 0:
             return torch.zeros(len(self.area_centers))
         else:
-            dem[self.area_centers.index.values] = 0 # Create columns with area names
-            dem[self.area_centers.index.values] = dem.apply(lambda x: self.coords_to_areas(x), axis=1) # Apply function to all openings
+            dem.loc[:,self.area_centers.index.values] = 0 # Create columns with area names
+            dem.loc[:,self.area_centers.index.values] = dem.apply(lambda x: self.coords_to_areas(x), axis=1) # Apply function to all openings
             return torch.tensor(dem.sum(axis=0).loc[self.area_centers.index].values) # Aggregate demand in the time window over areas (.loc to remove gps coords and platform). Sum of demand equals to amount of app openings
     
     def vehicle_locations(self, idx):
@@ -230,3 +227,8 @@ class sarDataset(Dataset):
         s1 = self.state(idx+1) # Returns position of cars in timepoint idx+1 and demand between idx+1-timedelta and idx+1
         r = self.revenue(idx) # Returns total revenue between idx-timedelta and idx
         return s, a, s1, r
+
+if __name__ == "__main__":
+    dm = DataModule(batch_size=1)
+    dm.setup(stage='fit')
+    print(next(iter(dm.train_dataloader())))

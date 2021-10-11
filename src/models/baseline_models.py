@@ -1,4 +1,5 @@
 from ..data.load_data import DataModule
+import os
 import numpy as np
 import torch
 from torch import nn
@@ -7,7 +8,7 @@ import pytorch_lightning as pl
 from sklearn.linear_model import LogisticRegression
 
 class BC_FFNN(pl.LightningModule):
-    def __init__(self, hidden_layers=[1000, 500]):
+    def __init__(self, hidden_layers=[100, 50]):
         super().__init__()
 
         self.in_features = 603
@@ -18,27 +19,31 @@ class BC_FFNN(pl.LightningModule):
             self.layers_hidden.append(nn.ReLU())
             self.in_features = neurons
 
-        self.layers_hidden.append(nn.Linear(hidden_layers[-1], 550))
+        self.layers_hidden.append(nn.Linear(hidden_layers[-1], 555))
         self.layers_hidden.append(nn.Sigmoid())
         self.layers_hidden = nn.Sequential(*self.layers_hidden)
 
-    def forward(self, x):
-        return self.layers_hidden(x).round()
+    def forward(self, s):
+        return self.layers_hidden(s.float()).round().int()
 
     def training_step(self, batch, batch_idx):
-        x, y = batch
-        loss = F.binary_cross_entropy(self(x), y)
+        s, a, *_ = batch
+        loss = F.binary_cross_entropy(self(s), a.int())
         self.log('Loss', loss, on_epoch=True, logger=True)
         return loss
 
+    def configure_optimizers(self):
+        return torch.optim.Adam(self.parameters(), lr=1e-5)
 
 
 if __name__ == "__main__":
-    print(torch.cuda.device_count())
     pl.seed_everything(seed=42)
-    dm = DataModule(shuffle_time=True, batch_size=10)
+    dm = DataModule(shuffle_time=True, batch_size=10, num_workers=2)
     model = BC_FFNN()
-    trainer = pl.Trainer(gpus=1, precision=16)
+    if torch.cuda.device_count()>0:
+        trainer = pl.Trainer(gpus=torch.cuda.device_count(), precision=16)
+    else:
+        trainer = pl.Trainer()
     dm.setup(stage='fit')
 
     trainer.fit(model, dm)
