@@ -15,7 +15,7 @@ from itertools import combinations, product
 from pyproj import Geod
 from tqdm import tqdm
 
-#TODO: Check action times and regulate time_window and timepoint_delta
+#TODO: Time_window vs time_delta tuning
 
 class DataModule(pl.LightningDataModule):
     def __init__(self, batch_size:int=16, time_step:timedelta=timedelta(minutes=30), time_window:timedelta=timedelta(minutes=30),
@@ -168,14 +168,9 @@ class sarDataset(Dataset):
         o2d = [c[0]+c[1] for c in list(combinations(self.area_centers.index.values.astype('str'), 2))]
         self.o2dv = [c[0]+c[1] for c in list(product(o2d, self.vehicles.values))] # All possible combinations of start, end zones and vehicles for action space
 
-    def distance(self,lat1,lon1,lat2,lon2):
-        # Auxiliary method for coords_to_areas. Calculates a distance between 2 coordinates
-        _,_,dist = self.wgs84_geod.inv(lon1,lat1,lon2,lat2)
-        return dist
-
     def coords_to_areas(self, target):
         # Auxiliary method for demand. Calculate to which area an opening's coordinates (target) "belong to".
-        dists = self.distance(
+        _,_,dists = self.wgs84_geod.inv(
             self.area_centers['GPS_Latitude'], self.area_centers['GPS_Longitude'],
             np.full(len(self.area_centers),target['GPS_Latitude']), np.full(len(self.area_centers),target['GPS_Longitude']))
         return pd.Series(1 - dists / sum(dists)) / (len(dists) - 1) # Percentage of how much an opening belongs to each area
@@ -208,7 +203,7 @@ class sarDataset(Dataset):
         # Auxiliary method for __getitem__. Joins vehicle locations and demand
         dem = self.demand(idx)
         loc = self.vehicle_locations(idx)
-        return torch.hstack((dem, loc))
+        return torch.hstack((torch.tensor(self.timepoint[idx].month), torch.tensor(self.timepoint[idx].day), torch.tensor(self.timepoint[idx].hour), dem, loc))
 
     def actions(self, idx):
         # Auxiliary method for __getitem__. Calculates actions
@@ -217,9 +212,9 @@ class sarDataset(Dataset):
                         (self.rental['End_Datetime_Local'] < self.timepoint[idx])]
         ad = ad[ad['Virtual_Start_Zone_Name'] != ad['Virtual_End_Zone_Name']].iloc[:,19:]
         ad = np.reshape(ad.to_numpy(), (-1, ad.shape[1]))[:self.n_actions]
-        a = np.zeros((self.n_actions, ad.shape[1]))
+        a = np.zeros((self.n_actions, ad.shape[1]), dtype=np.int8)
         a[:ad.shape[0]] = ad
-        return torch.from_numpy(a)
+        return torch.from_numpy(a.reshape(-1))
 
     def revenue(self, idx):
         # Auxiliary method for __getitem__. Uses array timepoint as a index.
@@ -235,13 +230,3 @@ class sarDataset(Dataset):
         s1 = self.state(idx+1) # Returns position of cars in timepoint idx+1 and demand between idx+1-timedelta and idx+1
         r = self.revenue(idx) # Returns total revenue between idx-timedelta and idx
         return s, a, s1, r
-
-if __name__ == "__main__":
-    dm = DataModule()
-    dm.prepare_data(optimise=False, opt_zones=False, n_zones=50)
-    # data = sarDataset(np.arange(datetime(2020, 2, 1, 0, 56, 26), datetime(2020, 2, 1, 0, 56, 26), timedelta(hours=1)).astype(datetime))
-    # s, a, s1, r = data[1000]
-    # print('s:', s, '\n\n')
-    # print('a:', a, '\n\n')
-    # print('s1:', s1, '\n\n')
-    # print('r:', r, '\n\n')
