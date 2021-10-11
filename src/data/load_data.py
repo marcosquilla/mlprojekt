@@ -175,7 +175,7 @@ class sarDataset(Dataset):
     def demand(self, idx):
         # Auxiliary method for __getitem__. Uses array timepoint as a index. Returns the demand of all areas at some point in time.
         dem = self.openings[(self.openings['Created_Datetime_Local'] > self.timepoint[idx]-self.time_window) &
-        (self.openings['Created_Datetime_Local'] <= self.timepoint[idx])]
+        (self.openings['Created_Datetime_Local'] <= self.timepoint[idx])].copy()
         if len(dem) == 0:
             return torch.zeros(len(self.area_centers))
         else:
