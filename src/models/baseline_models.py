@@ -8,10 +8,10 @@ import pytorch_lightning as pl
 from sklearn.linear_model import LogisticRegression
 
 class BC_FFNN(pl.LightningModule):
-    def __init__(self, hidden_layers=[100, 50]):
+    def __init__(self, hidden_layers=[100, 50], in_out=[603, 555], n_actions:int=5):
         super().__init__()
 
-        self.in_features = 603
+        self.in_features = in_out[0]
 
         self.layers_hidden = []
         for neurons in hidden_layers:
@@ -19,9 +19,11 @@ class BC_FFNN(pl.LightningModule):
             self.layers_hidden.append(nn.ReLU())
             self.in_features = neurons
 
-        self.layers_hidden.append(nn.Linear(hidden_layers[-1], 555))
+        self.layers_hidden.append(nn.Linear(hidden_layers[-1], in_out[1]))
         self.layers_hidden.append(nn.Sigmoid())
         self.layers_hidden = nn.Sequential(*self.layers_hidden)
+
+        self.n_areas = len(pd.read_csv((Path('.') / 'data' / 'processed' / 'areas.csv'), index_col=0))
 
     def forward(self, s):
         return self.layers_hidden(s.float()).round().int()
@@ -38,14 +40,16 @@ class BC_FFNN(pl.LightningModule):
 
 if __name__ == "__main__":
     pl.seed_everything(seed=42)
-    dm = DataModule(shuffle_time=True, batch_size=10, num_workers=2)
-    model = BC_FFNN()
+    dm = DataModule(shuffle_time=True, batch_size=10, num_workers=2, n_actions=5)
+    dm.setup(stage='fit')
+    s, a, *_ = next(iter(dm.train_dataloader()))
+    model = BC_FFNN(in_out=[s.shape[1], a.shape[1]], n_actions=5)
+
     if torch.cuda.device_count()>0:
         trainer = pl.Trainer(gpus=torch.cuda.device_count(), precision=16)
     else:
         trainer = pl.Trainer()
-    dm.setup(stage='fit')
-
+    
     trainer.fit(model, dm)
     # clf = LogisticRegression(n_jobs=-1, verbose=1)
     # s, a, *_ = next(iter(dm.train_dataloader()))

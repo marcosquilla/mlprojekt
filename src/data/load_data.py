@@ -20,7 +20,7 @@ from tqdm import tqdm
 class DataModule(pl.LightningDataModule):
     def __init__(self, batch_size:int=16, time_step:timedelta=timedelta(minutes=30), time_window:timedelta=timedelta(minutes=30),
     time_start=datetime(2020, 2, 1, 0, 56, 26), time_end=datetime(2021, 5, 3, 23, 59, 55), 
-    test_size=0.2, val_size=0, shuffle_time=False, num_workers=0):
+    test_size=0.2, val_size=0, shuffle_time=False, num_workers=0, n_actions=5):
         super().__init__()
 
         if not isinstance(batch_size, int):
@@ -42,11 +42,11 @@ class DataModule(pl.LightningDataModule):
 
     def setup(self, stage=None):
         if stage in (None, "fit"):
-            self.train_data = sarDataset(self.train_idx, time_window=self.time_window)
+            self.train_data = sarDataset(self.train_idx, time_window=self.time_window, n_actions=n_actions)
         if stage in (None, "validate"):
-            self.val_data = sarDataset(self.val_idx, time_window=self.time_window)
+            self.val_data = sarDataset(self.val_idx, time_window=self.time_window, n_actions=n_actions)
         if stage in (None, "test"):
-            self.test_data = sarDataset(self.test_idx, time_window=self.time_window)
+            self.test_data = sarDataset(self.test_idx, time_window=self.time_window, n_actions=n_actions)
         
     def train_dataloader(self):
         return DataLoader(self.train_data, batch_size=self.batch_size, num_workers=self.num_workers)
@@ -231,4 +231,5 @@ class sarDataset(Dataset):
 if __name__ == "__main__":
     dm = DataModule(batch_size=1)
     dm.setup(stage='fit')
-    print(next(iter(dm.train_dataloader())))
+    s, a, *_= next(iter(dm.train_dataloader()))
+    print(s.shape[1])
