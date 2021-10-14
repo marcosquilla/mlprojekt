@@ -33,6 +33,7 @@ class DataModule(pl.LightningDataModule):
             raise TypeError("time_end is not datetime")
 
         self.num_workers = num_workers
+        self.n_actions=n_actions
         self.batch_size = batch_size
         self.time_window = time_window
         self.timepoints = np.arange(time_start, time_end, time_step).astype(datetime) # Link between indexes and datetimes
@@ -42,11 +43,11 @@ class DataModule(pl.LightningDataModule):
 
     def setup(self, stage=None):
         if stage in (None, "fit"):
-            self.train_data = sarDataset(self.train_idx, time_window=self.time_window, n_actions=n_actions)
+            self.train_data = sarDataset(self.train_idx, time_window=self.time_window, n_actions=self.n_actions)
         if stage in (None, "validate"):
-            self.val_data = sarDataset(self.val_idx, time_window=self.time_window, n_actions=n_actions)
+            self.val_data = sarDataset(self.val_idx, time_window=self.time_window, n_actions=self.n_actions)
         if stage in (None, "test"):
-            self.test_data = sarDataset(self.test_idx, time_window=self.time_window, n_actions=n_actions)
+            self.test_data = sarDataset(self.test_idx, time_window=self.time_window, n_actions=self.n_actions)
         
     def train_dataloader(self):
         return DataLoader(self.train_data, batch_size=self.batch_size, num_workers=self.num_workers)
@@ -181,7 +182,7 @@ class sarDataset(Dataset):
         else:
             dem.loc[:,self.area_centers.index.values] = 0 # Create columns with area names
             dem.loc[:,self.area_centers.index.values] = dem.apply(lambda x: self.coords_to_areas(x), axis=1) # Apply function to all openings
-            return torch.tensor(dem.sum(axis=0).loc[self.area_centers.index].values) # Aggregate demand in the time window over areas (.loc to remove gps coords and platform). Sum of demand equals to amount of app openings
+            return torch.tensor(dem.loc[:,self.area_centers.index].sum(axis=0).values) # Aggregate demand in the time window over areas (.loc to remove gps coords and platform). Sum of demand equals to amount of app openings
     
     def vehicle_locations(self, idx):
         # Auxiliary method for __getitem__. Uses array timepoint as a index.

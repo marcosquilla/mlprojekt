@@ -1,6 +1,7 @@
 from ..data.load_data import DataModule
-import os
+from pathlib import Path
 import numpy as np
+import pandas as pd
 import torch
 from torch import nn
 import torch.nn.functional as F
@@ -20,17 +21,29 @@ class BC_FFNN(pl.LightningModule):
             self.in_features = neurons
 
         self.layers_hidden.append(nn.Linear(hidden_layers[-1], in_out[1]))
-        self.layers_hidden.append(nn.Sigmoid())
         self.layers_hidden = nn.Sequential(*self.layers_hidden)
 
         self.n_areas = len(pd.read_csv((Path('.') / 'data' / 'processed' / 'areas.csv'), index_col=0))
+        self.n_actions = n_actions
 
     def forward(self, s):
-        return self.layers_hidden(s.float()).round().int()
+        aa = self.layers_hidden(s.float())
+        original_shape = aa.shape
+        aa = aa.reshape(self.n_actions, -1)
+        a = torch.zeros(aa.shape, dtype=torch.int8)
+        a[np.arange(self.n_actions), torch.argmax(aa[:, :-2*self.n_areas], dim=1)] = 1 # Choose car
+        a[np.arange(self.n_actions), -2*self.n_areas+torch.argmax(aa[:, -2*self.n_areas:-self.n_areas], dim=1)] = 1 # Choose origin area
+        a[np.arange(self.n_actions), -self.n_areas+torch.argmax(aa[:, -self.n_areas:], dim=1)] = 1 # Choose destination area
+        a[torch.argmax(aa[:, -2*self.n_areas:-self.n_areas], dim=1) == torch.argmax(aa[:, -self.n_areas:], dim=1)] = 0 # Delete redundant moves
+        return a.reshape(original_shape)
 
     def training_step(self, batch, batch_idx):
         s, a, *_ = batch
-        loss = F.binary_cross_entropy(self(s), a.int())
+        ap = self(s)
+        print(ap)
+        print("\n")
+        print(a)
+        loss = nn.MultiLabelSoftMarginLoss(ap, a)
         self.log('Loss', loss, on_epoch=True, logger=True)
         return loss
 
@@ -40,10 +53,11 @@ class BC_FFNN(pl.LightningModule):
 
 if __name__ == "__main__":
     pl.seed_everything(seed=42)
-    dm = DataModule(shuffle_time=True, batch_size=10, num_workers=2, n_actions=5)
+    n_actions = 5
+    dm = DataModule(shuffle_time=True, batch_size=10, num_workers=6, n_actions=n_actions)
     dm.setup(stage='fit')
     s, a, *_ = next(iter(dm.train_dataloader()))
-    model = BC_FFNN(in_out=[s.shape[1], a.shape[1]], n_actions=5)
+    model = BC_FFNN(hidden_layers=[1000, 500, 100], in_out=[s.shape[1], a.shape[1]], n_actions=n_actions)
 
     if torch.cuda.device_count()>0:
         trainer = pl.Trainer(gpus=torch.cuda.device_count(), precision=16)
