@@ -384,7 +384,7 @@ class CarDataset(Dataset):
     def load_data(self):
         self.area_centers = pd.read_csv((Path('.') / 'data' / 'processed' / 'areas.csv'), index_col=0)
 
-        self.demand = pd.read_csv((Path('.') / 'data' / 'processed' / 'demand.csv'))
+        self.demand = pd.read_csv((Path('.') / 'data' / 'processed' / 'demand.csv'), index_col=0)
     
         self.rental = pd.read_csv((Path('.') / 'data' / 'processed' / 'rental.csv'), low_memory=False)
         self.rental.loc[:,'Start_Datetime_Local'] = pd.to_datetime(self.rental['Start_Datetime_Local'], format='%Y-%m-%d %H:%M')
