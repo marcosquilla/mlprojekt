@@ -17,10 +17,10 @@ from tqdm import tqdm
 
 #TODO: Time_window vs time_delta tuning
 
-class DataModule(pl.LightningDataModule):
+class FleetDataModule(pl.LightningDataModule):
     def __init__(self, batch_size:int=16, time_step:timedelta=timedelta(minutes=30), time_window:timedelta=timedelta(minutes=30),
     time_start=datetime(2020, 2, 1, 0, 56, 26), time_end=datetime(2021, 5, 3, 23, 59, 55), 
-    test_size=0.2, val_size=0, shuffle_time=False, num_workers=0, n_actions=5):
+    test_size=0.2, shuffle_time=False, num_workers=0, n_actions=5):
         super().__init__()
 
         if not isinstance(batch_size, int):
@@ -38,22 +38,15 @@ class DataModule(pl.LightningDataModule):
         self.time_window = time_window
         self.timepoints = np.arange(time_start, time_end, time_step).astype(datetime) # Link between indexes and datetimes
         self.train_idx, self.test_idx = train_test_split(self.timepoints, test_size=test_size, shuffle=shuffle_time)
-        if val_size>0:
-            self.train_idx , self.val_idx = train_test_split(self.train_idx, test_size=val_size/(1-test_size), shuffle=shuffle_time)
 
     def setup(self, stage=None):
         if stage in (None, "fit"):
-            self.train_data = sarDataset(self.train_idx, time_window=self.time_window, n_actions=self.n_actions)
-        if stage in (None, "validate"):
-            self.val_data = sarDataset(self.val_idx, time_window=self.time_window, n_actions=self.n_actions)
+            self.train_data = FleetDataset(self.train_idx, time_window=self.time_window, n_actions=self.n_actions)
         if stage in (None, "test"):
-            self.test_data = sarDataset(self.test_idx, time_window=self.time_window, n_actions=self.n_actions)
+            self.test_data = FleetDataset(self.test_idx, time_window=self.time_window, n_actions=self.n_actions)
         
     def train_dataloader(self):
         return DataLoader(self.train_data, batch_size=self.batch_size, num_workers=self.num_workers)
-
-    def val_dataloader(self):
-        return DataLoader(self.val_data, batch_size=self.batch_size, num_workers=self.num_workers)
     
     def test_dataloader(self):
         return DataLoader(self.test_data, batch_size=self.batch_size, num_workers=self.num_workers)
@@ -131,7 +124,7 @@ class DataModule(pl.LightningDataModule):
                 (openings['GPS_Longitude'] > swlon) & (openings['GPS_Longitude'] < nelon)]
             openings.to_csv(Path('.') / 'data' / 'processed' / 'openings.csv', index=False)
 
-class sarDataset(Dataset):
+class FleetDataset(Dataset):
     def __init__(self, timepoints, time_window:timedelta, n_actions:int=5):
 
         if not isinstance(timepoints, (list, tuple, set, np.ndarray, pd.Series)):
@@ -211,8 +204,9 @@ class sarDataset(Dataset):
         ad = ad[ad['Virtual_Start_Zone_Name'] != ad['Virtual_End_Zone_Name']].iloc[:,19:]
         ad = np.reshape(ad.to_numpy(), (-1, ad.shape[1]))[:self.n_actions]
         a = np.zeros((self.n_actions, ad.shape[1]), dtype=np.int8)
-        a[:ad.shape[0]] = ad
-        return torch.from_numpy(a.reshape(-1))
+        a[:ad.shape[0]] = ad # Set actual movements
+        a[ad.shape[0]:, [0, -2*len(self.area_centers), -len(self.area_centers)]] = 1 # Set redundant movements in the rest
+        return torch.from_numpy(a)
 
     def revenue(self, idx):
         # Auxiliary method for __getitem__. Uses array timepoint as a index.
@@ -223,11 +217,14 @@ class sarDataset(Dataset):
         return len(self.timepoint)
 
     def __getitem__(self, idx):
-        s = self.state(idx) # Returns position of cars in timepoint idx and demand between idx-timedelta and idx
-        a = self.actions(idx) # Returns end position of cars due to service trips within idx-timedelta (only moved cars)
-        s1 = self.state(idx+1) # Returns position of cars in timepoint idx+1 and demand between idx+1-timedelta and idx+1
-        r = self.revenue(idx) # Returns total revenue between idx-timedelta and idx
-        return s, a, s1, r
+        if idx > self.__len__():
+            return None
+        else:
+            s = self.state(idx) # Returns position of cars in timepoint idx and demand between idx-timedelta and idx
+            a = self.actions(idx) # Returns end position of cars due to service trips within idx-timedelta (only moved cars)
+            s1 = self.state(idx+1) # Returns position of cars in timepoint idx+1 and demand between idx+1-timedelta and idx+1
+            r = self.revenue(idx) # Returns total revenue between idx-timedelta and idx
+            return s, a, s1, r
 
 if __name__ == "__main__":
     dm = DataModule(batch_size=1)

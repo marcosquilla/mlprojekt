@@ -1,15 +1,16 @@
-from ..data.load_data import DataModule
 from pathlib import Path
+import os
 import numpy as np
 import pandas as pd
+from sklearn.metrics import f1_score
 import torch
 from torch import nn
 import torch.nn.functional as F
 import pytorch_lightning as pl
-from sklearn.linear_model import LogisticRegression
+from ..data.load_data import FleetDataModule
 
 class BC_FFNN(pl.LightningModule):
-    def __init__(self, hidden_layers=[100, 50], in_out=[603, 555], n_actions:int=5):
+    def __init__(self, hidden_layers=(100, 50), in_out=(603, 555), n_actions:int=5):
         super().__init__()
 
         self.in_features = in_out[0]
@@ -17,6 +18,7 @@ class BC_FFNN(pl.LightningModule):
         self.layers_hidden = []
         for neurons in hidden_layers:
             self.layers_hidden.append(nn.Linear(self.in_features, neurons))
+            self.layers_hidden.append(nn.Dropout(0.25))
             self.layers_hidden.append(nn.ReLU())
             self.in_features = neurons
 
@@ -27,24 +29,31 @@ class BC_FFNN(pl.LightningModule):
         self.n_actions = n_actions
 
     def forward(self, s):
-        aa = self.layers_hidden(s.float())
-        original_shape = aa.shape
-        aa = aa.reshape(self.n_actions, -1)
-        a = torch.zeros(aa.shape, dtype=torch.int8)
-        a[np.arange(self.n_actions), torch.argmax(aa[:, :-2*self.n_areas], dim=1)] = 1 # Choose car
-        a[np.arange(self.n_actions), -2*self.n_areas+torch.argmax(aa[:, -2*self.n_areas:-self.n_areas], dim=1)] = 1 # Choose origin area
-        a[np.arange(self.n_actions), -self.n_areas+torch.argmax(aa[:, -self.n_areas:], dim=1)] = 1 # Choose destination area
-        a[torch.argmax(aa[:, -2*self.n_areas:-self.n_areas], dim=1) == torch.argmax(aa[:, -self.n_areas:], dim=1)] = 0 # Delete redundant moves
-        return a.reshape(original_shape)
+        a = self.layers_hidden(s.float())
+        a = a.reshape(a.shape[0], self.n_actions, -1)
+        a_pred = torch.zeros_like(a)
+        a_pred[:, :, :-2*self.n_areas] = F.softmax(a[:, :, :-2*self.n_areas], dim=2) #Car
+        a_pred[:, :, -2*self.n_areas:-self.n_areas] = F.softmax(a[:, :, -2*self.n_areas:-self.n_areas], dim=2) #Origin
+        a_pred[:, :, -self.n_areas:] = F.softmax(a[:, :, -self.n_areas:], dim=2) #Destination
+        return a_pred
 
     def training_step(self, batch, batch_idx):
         s, a, *_ = batch
-        ap = self(s)
-        print(ap)
-        print("\n")
-        print(a)
-        loss = nn.MultiLabelSoftMarginLoss(ap, a)
+        a_logits = self(s)
+        loss_car = F.binary_cross_entropy_with_logits(a_logits[:, :, :-2*self.n_areas], a[:, :, :-2*self.n_areas].float())
+        loss_origin = F.binary_cross_entropy_with_logits(a_logits[:, :, -2*self.n_areas:-self.n_areas], a[:, :, -2*self.n_areas:-self.n_areas].float())
+        loss_destination = F.binary_cross_entropy_with_logits(a_logits[:, :, -self.n_areas:], a[:, :, -self.n_areas:].float())
+        loss = loss_car + loss_origin + loss_destination
         self.log('Loss', loss, on_epoch=True, logger=True)
+        a_pred = torch.zeros_like(a_logits, dtype=torch.int8).scatter(2, torch.argmax(a_logits[:, :, :-2*self.n_areas], dim=2).unsqueeze(1), 1)
+        a_pred = a_pred.scatter(2, a_pred.shape[2]-2*self.n_areas+torch.argmax(a_logits[:, :, -2*self.n_areas:-self.n_areas], dim=2).unsqueeze(1), 1)
+        a_pred = a_pred.scatter(2, a_pred.shape[2]-self.n_areas+torch.argmax(a_logits[:, :, -self.n_areas:], dim=2).unsqueeze(1), 1)
+        f1_cars = f1_score(a[:, :, :-2*self.n_areas].cpu().detach().numpy().reshape(-1), a_pred[:, :, :-2*self.n_areas].cpu().detach().numpy().reshape(-1))
+        f1_origin = f1_score(a[:, :, -2*self.n_areas:-self.n_areas].cpu().detach().numpy().reshape(-1), a_pred[:, :, -2*self.n_areas:-self.n_areas].cpu().detach().numpy().reshape(-1))
+        f1_destination = f1_score(a[:, :, -self.n_areas:].cpu().detach().numpy().reshape(-1), a_pred[:, :, -self.n_areas:].cpu().detach().numpy().reshape(-1))
+        self.log('F1 cars', f1_cars)
+        self.log('F1 origin', f1_origin)
+        self.log('F1 destination', f1_destination)
         return loss
 
     def configure_optimizers(self):
@@ -52,34 +61,20 @@ class BC_FFNN(pl.LightningModule):
 
 
 if __name__ == "__main__":
-    pl.seed_everything(seed=42)
+    pl.seed_everything(seed=42, workers=True)
     n_actions = 5
-    dm = DataModule(shuffle_time=True, batch_size=10, num_workers=6, n_actions=n_actions)
+    dm = FleetDataModule(shuffle_time=True, batch_size=16, num_workers=int(os.cpu_count()/2), n_actions=n_actions)
     dm.setup(stage='fit')
     s, a, *_ = next(iter(dm.train_dataloader()))
-    model = BC_FFNN(hidden_layers=[1000, 500, 100], in_out=[s.shape[1], a.shape[1]], n_actions=n_actions)
+    in_size = s.shape[1]
+    out_size = a.shape[1]*a.shape[2]
+    model = BC_FFNN(hidden_layers=(20*in_size, int(10*in_size+5*out_size), 10*out_size), in_out=(in_size, out_size), n_actions=n_actions)
 
     if torch.cuda.device_count()>0:
-        trainer = pl.Trainer(gpus=torch.cuda.device_count(), precision=16)
+        trainer = pl.Trainer(gpus=-1, precision=16)
     else:
-        trainer = pl.Trainer()
-    
+        trainer = pl.Trainer(log_every_n_steps=5)
+
+    #trainer = pl.Trainer(fast_dev_run=10)
+
     trainer.fit(model, dm)
-    # clf = LogisticRegression(n_jobs=-1, verbose=1)
-    # s, a, *_ = next(iter(dm.train_dataloader()))
-    # clf.fit(s, a)
-
-    # for batch in tqdm(dm.train_dataloader()):
-    #     s, a, *_ = batch
-    #     clf.partial_fit(s.detach().numpy().squeeze().reshape(1, -1), a.detach().numpy().squeeze())
-    
-    #dm.setup(stage='test')
-    # s, a, *_ = next(iter(dm.test_dataloader()))
-    # print(clf.score(s, a))
-
-    # batch_acc = []
-    # for batch in tqdm(dm.test_dataloader()):
-    #     s, a, *_ = batch
-    #     batch_acc.append(clf.score(s.detach().numpy().squeeze().reshape(1, -1), a.detach().numpy().squeeze()))
-    # batch_acc = np.array(batch_acc)
-    # np.savetxt('reports/baseline_acc.csv', batch_acc, delimiter=',')
