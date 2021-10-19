@@ -345,7 +345,7 @@ class CarDataModule(pl.LightningDataModule):
             self.rental.rename(columns={'Virtual_End_Zone_Name': 'Virtual_Zone_Name'}, inplace=True) # Rename
             self.rental['VZE_ori'] = self.rental['Virtual_Zone_Name'] # Keep original column
             self.rental = pd.get_dummies(self.rental, columns=['Virtual_Zone_Name'])
-            cols_loc = np.append(self.rental.columns[(self.rental.columns.str.contains('Plate') | self.rental.columns.str.contains('Vehicle_Model') | self.rental.columns.str.contains('Virtual_Zone_Name_'))].values, 'Time')
+            cols_loc = np.append(self.rental.columns[(self.rental.columns.str.contains('Plate') | self.rental.columns.str.contains('Virtual_Zone_Name_') | self.rental.columns.str.contains('Vehicle_Model'))].values, 'Time')
             cols_act = np.append(self.rental.columns[(self.rental.columns.str.contains('Plate') | self.rental.columns.str.contains('Virtual_Zone_Name_'))].values, 'Time')
 
             locations = pd.concat([self.vehicle_locations(i).loc[:,cols_loc] for i, _ in enumerate(tqdm(self.timepoints))])
@@ -357,13 +357,15 @@ class CarDataModule(pl.LightningDataModule):
             del self.rental, locations, actions
         
         if not (Path('.') / 'data' / 'processed' / 'demand.csv').is_file():
+            self.wgs84_geod = Geod(ellps='WGS84') # Distance will be measured in meters on this ellipsoid - more accurate than a spherical method
+            self.area_centers = pd.read_csv((Path('.') / 'data' / 'processed' / 'areas.csv'), index_col=0)
             self.openings = pd.read_csv((Path('.') / 'data' / 'interim' / 'openings.csv'))
             self.openings.loc[:,'Created_Datetime_Local'] = pd.to_datetime(self.openings['Created_Datetime_Local'], format='%Y-%m-%d %H:%M')
 
-            demand_dist = pd.concat([pd.DataFrame(self.demand(i).loc[:,cols_loc]).T for i, _ in enumerate(tqdm(self.timepoints))])
+            demand_dist = pd.concat([pd.DataFrame(self.demand(i)).T for i, _ in enumerate(tqdm(self.timepoints))])
             demand_dist.set_index('Time', inplace=True)
             demand_dist.to_csv(Path('.') / 'data' / 'processed' / 'demand.csv', index=True)
-            del self.openings, demand_dist
+            del self.openings, self.area_centers, self.wgs84_geod, demand_dist
 
     def coords_to_areas(self, target):
         # Auxiliary method for demand. Calculate to which area an opening's coordinates (target) "belong to".
@@ -412,10 +414,7 @@ class CarDataset(Dataset):
             raise TypeError("time_window is not timedelta")
         
         self.indices = indices
-
         self.time_window = time_window
-        self.wgs84_geod = Geod(ellps='WGS84') # Distance will be measured in meters on this ellipsoid - more accurate than a spherical method
-
         self.load_data()        
 
     def load_data(self):
