@@ -351,7 +351,7 @@ class CarDataModule(pl.LightningDataModule):
             locations = pd.concat([self.vehicle_locations(i).loc[:,cols_loc] for i, _ in enumerate(tqdm(self.timepoints))])
             locations.to_csv(Path('.') / 'data' / 'processed' / 'locations.csv', index=False)
 
-            actions = pd.concat([self.actions(i).loc[:,cols_loc] for i, _ in enumerate(tqdm(self.timepoints))])
+            actions = pd.concat([self.actions(i).loc[:,cols_act] for i, _ in enumerate(tqdm(self.timepoints))])
             actions.to_csv(Path('.') / 'data' / 'processed' / 'actions.csv', index=False)
 
             del self.rental, locations, actions
