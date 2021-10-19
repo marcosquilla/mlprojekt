@@ -12,7 +12,7 @@ from torch.utils.data import DataLoader, Dataset
 from sklearn.model_selection import train_test_split
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
-from itertools import combinations, product
+from itertools import product
 from pyproj import Geod
 from tqdm import tqdm
 
@@ -247,10 +247,10 @@ class CarDataModule(pl.LightningDataModule):
         self.time_window = time_window
         self.timepoints = np.arange(time_start, time_end, time_step).astype(datetime)
         self.prepare_data()
-        self.cars = pd.unique(pd.read_csv(Path.cwd().parent / 'data' / 'processed' / 'rental.csv', usecols=[0]).iloc[:,0])
-        self.index = list(product(self.timepoints, self.cars))
+        self.cars = pd.unique(pd.read_csv(Path.cwd().parent / 'data' / 'interim' / 'rental.csv', usecols=[0]).iloc[:,0])
+        self.indeces = list(product(self.timepoints, self.cars))
 
-        self.train_idx, self.test_idx = train_test_split(self.index, test_size=test_size, shuffle=shuffle_time)
+        self.train_idx, self.test_idx = train_test_split(self.indeces, test_size=test_size, shuffle=shuffle_time)
 
     def setup(self, stage=None):
         if stage in (None, "fit"):
@@ -348,27 +348,21 @@ class CarDataModule(pl.LightningDataModule):
             cols_loc = np.append(self.rental.columns[(self.rental.columns.str.contains('Plate') | self.rental.columns.str.contains('Vehicle_Model') | self.rental.columns.str.contains('Virtual_Zone_Name_'))].values, 'Time')
             cols_act = np.append(self.rental.columns[(self.rental.columns.str.contains('Plate') | self.rental.columns.str.contains('Virtual_Zone_Name_'))].values, 'Time')
 
-            locations = pd.DataFrame(self.vehicle_locations(0).loc[:,cols_loc])
-            for idx, _ in enumerate(tqdm(self.timepoints[1:])):
-                locations.append(self.vehicle_locations(idx).loc[:,cols_loc])
-            locations.to_csv(Path('.') / 'data' / 'processed' / 'locations.csv', ignore_index=True)
+            locations = pd.concat([self.vehicle_locations(i).loc[:,cols_loc] for i, _ in enumerate(tqdm(self.timepoints))])
+            locations.to_csv(Path('.') / 'data' / 'processed' / 'locations.csv', index=False)
 
-            actions = pd.DataFrame(self.actions(0).loc[:, cols_act])
-            for idx, _ in enumerate(tqdm(self.timepoints[1:])):
-                actions.append(self.actions(idx).loc[:, cols_loc])
-            actions.to_csv(Path('.') / 'data' / 'processed' / 'actions.csv', ignore_index=True)
+            actions = pd.concat([self.actions(i).loc[:,cols_loc] for i, _ in enumerate(tqdm(self.timepoints))])
+            actions.to_csv(Path('.') / 'data' / 'processed' / 'actions.csv', index=False)
 
             del self.rental, locations, actions
         
         if not (Path('.') / 'data' / 'processed' / 'demand.csv').is_file():
-            self.openings = pd.read_csv((Path('.') / 'data' / 'processed' / 'openings.csv'))
+            self.openings = pd.read_csv((Path('.') / 'data' / 'interim' / 'openings.csv'))
             self.openings.loc[:,'Created_Datetime_Local'] = pd.to_datetime(self.openings['Created_Datetime_Local'], format='%Y-%m-%d %H:%M')
 
-            demand_dist = pd.DataFrame(demand(0)).T
-            for idx, _ in enumerate(tqdm(self.timepoints[1:])):
-                demand_dist = demand_dist.append(self.demand(idx), ignore_index=True)
+            demand_dist = pd.concat([pd.DataFrame(self.demand(i).loc[:,cols_loc]).T for i, _ in enumerate(tqdm(self.timepoints))])
             demand_dist.set_index('Time', inplace=True)
-            demand_dist.to_csv(Path('.') / 'data' / 'processed' / 'demand.csv')
+            demand_dist.to_csv(Path('.') / 'data' / 'processed' / 'demand.csv', index=True)
             del self.openings, demand_dist
 
     def coords_to_areas(self, target):
