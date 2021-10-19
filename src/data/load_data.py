@@ -230,7 +230,7 @@ class FleetDataset(Dataset):
 class CarDataModule(pl.LightningDataModule):
     def __init__(self, batch_size:int=16, time_step:timedelta=timedelta(minutes=30), time_window:timedelta=timedelta(minutes=30),
     time_start=datetime(2020, 2, 1, 0, 56, 26), time_end=datetime(2021, 5, 3, 23, 59, 55), 
-    test_size=0.2, shuffle_time=False, num_workers=0):
+    test_size=0.2, shuffle=False, num_workers=0):
         super().__init__()
 
         if not isinstance(batch_size, int):
@@ -250,7 +250,7 @@ class CarDataModule(pl.LightningDataModule):
         self.cars = pd.unique(pd.read_csv(Path.cwd().parent / 'data' / 'interim' / 'rental.csv', usecols=[0]).iloc[:,0])
         self.indeces = list(product(self.timepoints, self.cars))
 
-        self.train_idx, self.test_idx = train_test_split(self.indeces, test_size=test_size, shuffle=shuffle_time)
+        self.train_idx, self.test_idx = train_test_split(self.indeces, test_size=test_size, shuffle=shuffle)
 
     def setup(self, stage=None):
         if stage in (None, "fit"):
@@ -365,6 +365,7 @@ class CarDataModule(pl.LightningDataModule):
             demand_dist = pd.concat([pd.DataFrame(self.demand(i)).T for i, _ in enumerate(tqdm(self.timepoints))])
             demand_dist.set_index('Time', inplace=True)
             demand_dist.to_csv(Path('.') / 'data' / 'processed' / 'demand.csv', index=True)
+            
             del self.openings, self.area_centers, self.wgs84_geod, demand_dist
 
     def coords_to_areas(self, target):
