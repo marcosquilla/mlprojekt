@@ -60,9 +60,9 @@ class FleetDataModule(pl.LightningDataModule):
         nelat=56.06417055142977
         nelon=12.688363746232875
         # Takes raw files, concatenates them, selects useful columns and saved into a single file.
-        if not ((Path('.') / 'data' / 'processed' / 'rental.csv').is_file() and 
+        if not ((Path('.') / 'data' / 'interim' / 'rental.csv').is_file() and 
                 (Path('.') / 'data' / 'processed' / 'areas.csv').is_file()):
-            if not (Path('.') / 'data' / 'interim' / 'rental.csv').is_file():
+            if not (Path('.') / 'data' / 'interim' / 'rental_join.csv').is_file():
                 rent_files = glob.glob(str((Path('.') / 'data' / 'raw' / rental_folder / '*.xlsx')))
                 rent_dfs = [pd.read_excel(f, skiprows=[0,1]) for f in rent_files]
                 rental = pd.concat(rent_dfs,ignore_index=True)
@@ -82,7 +82,7 @@ class FleetDataModule(pl.LightningDataModule):
                     (rental['Start_GPS_Longitude'] > swlon) & (rental['Start_GPS_Longitude'] < nelon) &
                     (rental['End_GPS_Latitude'] > swlat) & (rental['End_GPS_Latitude'] < nelat) & 
                     (rental['End_GPS_Longitude'] > swlon) & (rental['End_GPS_Longitude'] < nelon)]
-                rental.to_csv(Path('.') / 'data' / 'interim' / 'rental.csv', index=False)
+                rental.to_csv(Path('.') / 'data' / 'interim' / 'rental_join.csv', index=False)
             else:
                 rental = pd.read_csv((Path('.') / 'data' / 'interim' / 'rental.csv'), low_memory=False)
 
@@ -146,11 +146,11 @@ class FleetDataset(Dataset):
     def load_data(self):
         self.area_centers = pd.read_csv((Path('.') / 'data' / 'processed' / 'areas.csv'), index_col=0)
 
-        self.openings = pd.read_csv((Path('.') / 'data' / 'processed' / 'openings.csv'))
+        self.openings = pd.read_csv((Path('.') / 'data' / 'interim' / 'openings.csv'))
         self.openings.loc[:,'Created_Datetime_Local'] = pd.to_datetime(self.openings['Created_Datetime_Local'], format='%Y-%m-%d %H:%M')
         self.openings = pd.get_dummies(self.openings, columns=['Platform'], drop_first=True)
     
-        self.rental = pd.read_csv((Path('.') / 'data' / 'processed' / 'rental.csv'), low_memory=False)
+        self.rental = pd.read_csv((Path('.') / 'data' / 'interim' / 'rental.csv'), low_memory=False)
         self.rental.loc[:,'Start_Datetime_Local'] = pd.to_datetime(self.rental['Start_Datetime_Local'], format='%Y-%m-%d %H:%M')
         self.rental.loc[:,'End_Datetime_Local'] = pd.to_datetime(self.rental['End_Datetime_Local'], format='%Y-%m-%d %H:%M')
         self.rental = pd.get_dummies(self.rental, columns=['Vehicle_Engine_Type'], drop_first=True)
@@ -246,6 +246,7 @@ class CarDataModule(pl.LightningDataModule):
         self.batch_size = batch_size
         self.time_window = time_window
         self.timepoints = np.arange(time_start, time_end, time_step).astype(datetime)
+        self.prepare_data()
         self.cars = pd.unique(pd.read_csv(Path.cwd().parent / 'data' / 'processed' / 'rental.csv', usecols=[0]).iloc[:,0])
         self.index = list(product(self.timepoints, self.cars))
 
@@ -335,17 +336,40 @@ class CarDataModule(pl.LightningDataModule):
                 (openings['GPS_Longitude'] > swlon) & (openings['GPS_Longitude'] < nelon)]
             openings.to_csv(Path('.') / 'data' / 'interim' / 'openings.csv', index=False)
 
+        if not ((Path('.') / 'data' / 'processed' / 'locations.csv').is_file() and
+                (Path('.') / 'data' / 'processed' / 'actions.csv').is_file()):
+            self.rental = pd.read_csv((Path('.') / 'data' / 'interim' / 'rental.csv'), low_memory=False)
+            self.rental.loc[:,'Start_Datetime_Local'] = pd.to_datetime(self.rental['Start_Datetime_Local'], format='%Y-%m-%d %H:%M')
+            self.rental.loc[:,'End_Datetime_Local'] = pd.to_datetime(self.rental['End_Datetime_Local'], format='%Y-%m-%d %H:%M')
+            self.rental = pd.get_dummies(self.rental, columns=['Vehicle_Model'])
+            self.rental.rename(columns={'Virtual_End_Zone_Name': 'Virtual_Zone_Name'}, inplace=True) # Rename
+            self.rental['VZE_ori'] = self.rental['Virtual_Zone_Name'] # Keep original column
+            self.rental = pd.get_dummies(self.rental, columns=['Virtual_Zone_Name'])
+            cols_loc = np.append(self.rental.columns[(self.rental.columns.str.contains('Plate') | self.rental.columns.str.contains('Vehicle_Model') | self.rental.columns.str.contains('Virtual_Zone_Name_'))].values, 'Time')
+            cols_act = np.append(self.rental.columns[(self.rental.columns.str.contains('Plate') | self.rental.columns.str.contains('Virtual_Zone_Name_'))].values, 'Time')
+
+            locations = pd.DataFrame(self.vehicle_locations(0).loc[:,cols_loc])
+            for idx, _ in enumerate(tqdm(self.timepoints[1:])):
+                locations.append(self.vehicle_locations(idx).loc[:,cols_loc])
+            locations.to_csv(Path('.') / 'data' / 'processed' / 'locations.csv', ignore_index=True)
+
+            actions = pd.DataFrame(self.actions(0).loc[:, cols_act])
+            for idx, _ in enumerate(tqdm(self.timepoints[1:])):
+                actions.append(self.actions(idx).loc[:, cols_loc])
+            actions.to_csv(Path('.') / 'data' / 'processed' / 'actions.csv', ignore_index=True)
+
+            del self.rental, locations, actions
+        
         if not (Path('.') / 'data' / 'processed' / 'demand.csv').is_file():
             self.openings = pd.read_csv((Path('.') / 'data' / 'processed' / 'openings.csv'))
             self.openings.loc[:,'Created_Datetime_Local'] = pd.to_datetime(self.openings['Created_Datetime_Local'], format='%Y-%m-%d %H:%M')
 
             demand_dist = pd.DataFrame(demand(0)).T
-            for idx, time in enumerate(self.timepoints[1:]):
-                demand_dist.append(self.demand(idx), ignore_index=True)
-            demand.set_index(self.timepoints, inplace=True)
+            for idx, _ in enumerate(tqdm(self.timepoints[1:])):
+                demand_dist = demand_dist.append(self.demand(idx), ignore_index=True)
+            demand_dist.set_index('Time', inplace=True)
             demand_dist.to_csv(Path('.') / 'data' / 'processed' / 'demand.csv')
-            del self.openings
-
+            del self.openings, demand_dist
 
     def coords_to_areas(self, target):
         # Auxiliary method for demand. Calculate to which area an opening's coordinates (target) "belong to".
@@ -356,15 +380,34 @@ class CarDataModule(pl.LightningDataModule):
 
     def demand(self, idx):
         # Auxiliary method for __getitem__. Returns the demand of all areas at some point in time.
-        dem = self.openings[(self.openings['Created_Datetime_Local'] > self.indices[idx][0]-self.time_window) &
-        (self.openings['Created_Datetime_Local'] <= self.indices[idx][0])].copy()
+        dem = self.openings[(self.openings['Created_Datetime_Local'] > self.timepoints[idx]-self.time_window) &
+        (self.openings['Created_Datetime_Local'] <= self.timepoints[idx])].copy()
         if len(dem) == 0:
             return pd.Series(data=0, index=np.arange(len(self.area_centers)))
         else:
             dem.loc[:,self.area_centers.index.values] = 0 # Create columns with area names
             dem.loc[:,self.area_centers.index.values] = dem.apply(lambda x: self.coords_to_areas(x), axis=1) # Apply function to all openings
-            return dem.loc[:,self.area_centers.index].sum(axis=0) # Aggregate demand in the time window over areas (.loc to remove gps coords and platform). Sum of demand equals to amount of app openings
+            dem.loc[:,self.area_centers.index].sum(axis=0) # Aggregate demand in the time window over areas (.loc to remove gps coords and platform). Sum of demand equals to amount of app openings
+            dem['Time'] = self.timepoints[idx]
+            return dem
 
+    def vehicle_locations(self, idx):
+        # Auxiliary method for __getitem__.
+        loc = self.rental[self.rental['End_Datetime_Local'] <= self.timepoints[idx]]
+        loc = loc.drop_duplicates(subset='Vehicle_Number_Plate', keep='last') # Keep the last location
+        current_trips = self.rental[(self.rental['Start_Datetime_Local'] <= self.timepoints[idx]) & (self.rental['End_Datetime_Local'] > self.timepoints[idx])] # Cars in use
+        loc = loc[~loc['Vehicle_Number_Plate'].isin(current_trips['Vehicle_Number_Plate'])] # Filter out cars in use
+        loc['Time'] = self.timepoints[idx]
+        return loc
+
+    def actions(self, idx):
+        # Auxiliary method for __getitem__. Calculates actions
+        a = self.rental[(self.rental['Servicedrive_YN']==1) &
+                        (self.rental['Start_Datetime_Local'] >= self.timepoints[idx]-self.time_window) &
+                        (self.rental['End_Datetime_Local'] < self.timepoints[idx])]
+        a = a[a['Virtual_Start_Zone_Name'] != a['VZE_ori']]
+        a['Time'] = self.timepoints[idx]
+        return a
 
 class CarDataset(Dataset):
     def __init__(self, indices, time_window:timedelta):
@@ -383,50 +426,31 @@ class CarDataset(Dataset):
 
     def load_data(self):
         self.area_centers = pd.read_csv((Path('.') / 'data' / 'processed' / 'areas.csv'), index_col=0)
-
         self.demand = pd.read_csv((Path('.') / 'data' / 'processed' / 'demand.csv'), index_col=0)
-    
-        self.rental = pd.read_csv((Path('.') / 'data' / 'processed' / 'rental.csv'), low_memory=False)
-        self.rental.loc[:,'Start_Datetime_Local'] = pd.to_datetime(self.rental['Start_Datetime_Local'], format='%Y-%m-%d %H:%M')
-        self.rental.loc[:,'End_Datetime_Local'] = pd.to_datetime(self.rental['End_Datetime_Local'], format='%Y-%m-%d %H:%M')
-        self.rental = pd.get_dummies(self.rental, columns=['Vehicle_Engine_Type'], drop_first=True)
-        self.rental = pd.get_dummies(self.rental, columns=['Vehicle_Model'])
-        one_hot_zones = pd.get_dummies(self.rental.loc[:,['Virtual_Start_Zone_Name', 'Virtual_End_Zone_Name']], columns=['Virtual_Start_Zone_Name', 'Virtual_End_Zone_Name'])
-        self.rental = pd.concat([self.rental, one_hot_zones], axis=1)
-        
-        self.vehicles = self.rental.columns[self.rental.columns.str.contains('Vehicle_Model')] # Get names of vehicles
+        self.locations = pd.read_csv((Path('.') / 'data' / 'processed' / 'locations.csv'), low_memory=False)
+        self.actions = pd.read_csv((Path('.') / 'data' / 'processed' / 'actions.csv'), low_memory=False)
 
-    
-    def vehicle_locations(self, idx):
-        # Auxiliary method for __getitem__.
-        loc = self.rental[self.rental['End_Datetime_Local'] <= self.indices[idx][0]]
-        loc = loc.drop_duplicates(subset='Vehicle_Number_Plate', keep='last') # Keep the last location
-        current_trips = self.rental[(self.rental['Start_Datetime_Local'] <= self.indices[idx][0]) & (self.rental['End_Datetime_Local'] > self.indices[idx][0])] # Cars in use
-        loc = loc[~loc['Vehicle_Number_Plate'].isin(current_trips['Vehicle_Number_Plate'])] # Filter out cars in use
-        loc = loc.loc[:, ~loc.columns.str.contains('Start')].drop(columns=['End_Datetime_Local'], axis=1) # Drop unused columns
-        loc = loc.groupby('Virtual_End_Zone_Name')[self.vehicles].sum() # Aggregate amount of cars
-        missing_areas = pd.DataFrame(index=self.area_centers.index[~self.area_centers.index.isin(loc.index)], columns=loc.columns, data=0)
-        loc = pd.melt(pd.concat([loc, missing_areas]), ignore_index=False) # Add missing areas and unpivot
-        loc.index = loc.index.astype('str') + loc.variable # Join zone and vehicle model, necessary to sort
-        return torch.tensor(loc.drop(labels='variable', axis=1).sort_index().values).squeeze() # Drop vehicle model (already in index) and sort
+        self.demand.index = pd.to_datetime(self.demand.index, format='%Y-%m-%d %H:%M')
+        self.locations['Time'] = pd.to_datetime(self.locations['Time'], format='%Y-%m-%d %H:%M')
+        self.actions['Time'] = pd.to_datetime(self.actions['Time'], format='%Y-%m-%d %H:%M')
+        self.locations.index = pd.MultiIndex.from_frame(self.locations.loc[:,['Time', 'Vehicle_Number_Plate']])
+        self.actions.index = pd.MultiIndex.from_frame(self.actions.loc[:,['Time', 'Vehicle_Number_Plate']])
+        self.locations.drop(labels=['Time', 'Vehicle_Number_Plate'], axis=1, inplace=True)
+        self.actions.drop(labels=['Time', 'Vehicle_Number_Plate'], axis=1, inplace=True)
 
     def state(self, idx):
         # Auxiliary method for __getitem__. Joins vehicle locations and demand
-        dem = self.demand(idx)
-        loc = self.vehicle_locations(idx)
-        return torch.hstack((torch.tensor(self.indices[idx][0].month), torch.tensor(self.indices[idx][0].day), torch.tensor(self.indices[idx][0].hour), dem, loc))
-
-    def actions(self, idx):
-        # Auxiliary method for __getitem__. Calculates actions
-        ad = self.rental[(self.rental['Servicedrive_YN']==1) &
-                        (self.rental['Start_Datetime_Local'] >= self.indices[idx][0]-self.time_window) &
-                        (self.rental['End_Datetime_Local'] < self.indices[idx][0])]
-        ad = ad[ad['Virtual_Start_Zone_Name'] != ad['Virtual_End_Zone_Name']].iloc[:,19:]
-        ad = np.reshape(ad.to_numpy(), (-1, ad.shape[1]))[:self.n_actions]
-        a = np.zeros((self.n_actions, ad.shape[1]), dtype=np.int8)
-        a[:ad.shape[0]] = ad # Set actual movements
-        a[ad.shape[0]:, [0, -2*len(self.area_centers), -len(self.area_centers)]] = 1 # Set redundant movements in the rest
-        return torch.from_numpy(a)
+        dem = self.demand.loc[self.indeces[idx][0]]
+        try:
+            loc = self.locations.loc[self.indeces[idx]]
+            return torch.hstack(
+                (torch.tensor(self.indeces[idx][0].month), 
+                torch.tensor(self.indeces[idx][0].day), 
+                torch.tensor(self.indeces[idx][0].hour), 
+                dem.values, 
+                loc.values))
+        except KeyError: # Car not available for relocation
+            return None
 
     def __len__(self):
         return len(self.index)
@@ -436,12 +460,19 @@ class CarDataset(Dataset):
             return None
         else:
             s = self.state(idx)
-            a = self.actions(idx)
-            return s, a
+            if s is not None: # Car available for reloaction
+                try:
+                    a = self.actions[self.indices[idx]]
+                except KeyError: # No relocations made
+                    a = torch.zeros(len(self.area_centers), dtype=torch.int8)
+                return s, a
+            else:
+                return None
 
 
 if __name__ == "__main__":
-    dm = DataModule(batch_size=1)
+    dm = CarDataModule(batch_size=1)
     dm.setup(stage='fit')
-    s, a, *_= next(iter(dm.train_dataloader()))
-    print(s.shape[1])
+    s, a= next(iter(dm.train_dataloader()))
+    print(s, '\n\n')
+    print(a, '\n\n')
