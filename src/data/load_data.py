@@ -247,7 +247,7 @@ class CarDataModule(pl.LightningDataModule):
         self.time_window = time_window
         self.timepoints = np.arange(time_start, time_end, time_step).astype(datetime)
         self.prepare_data()
-        self.cars = pd.unique(pd.read_csv(Path.cwd().parent / 'data' / 'interim' / 'rental.csv', usecols=[0]).iloc[:,0])
+        self.cars = pd.unique(pd.read_csv(Path('.') / 'data' / 'interim' / 'rental.csv', usecols=[0]).iloc[:,0])
         self.indeces = list(product(self.timepoints, self.cars))
 
         self.train_idx, self.test_idx = train_test_split(self.indeces, test_size=test_size, shuffle=shuffle)
@@ -362,11 +362,17 @@ class CarDataModule(pl.LightningDataModule):
             self.openings = pd.read_csv((Path('.') / 'data' / 'interim' / 'openings.csv'))
             self.openings.loc[:,'Created_Datetime_Local'] = pd.to_datetime(self.openings['Created_Datetime_Local'], format='%Y-%m-%d %H:%M')
 
-            demand_dist = pd.concat([pd.DataFrame(self.demand(i)).T for i, _ in enumerate(tqdm(self.timepoints))])
+            demand_dist = pd.DataFrame(self.demand(0)).T
             demand_dist.set_index('Time', inplace=True)
             demand_dist.to_csv(Path('.') / 'data' / 'processed' / 'demand.csv', index=True)
-            
-            del self.openings, self.area_centers, self.wgs84_geod, demand_dist
+            l = len(self.timepoints)
+            for p in tqdm(range(0, 10)):
+                demand_dist = pd.concat([pd.DataFrame(self.demand(i)).T for i, _ in enumerate(tqdm(self.timepoints[int(l*p/10):int(l*(p+1)/10)], leave=False))])
+                demand_dist.set_index('Time', inplace=True)
+                demand_dist.to_csv(Path('.') / 'data' / 'processed' / 'demand.csv', index=True, header=False, mode='a')
+                del demand_dist
+
+            del self.openings, self.area_centers, self.wgs84_geod
 
     def coords_to_areas(self, target):
         # Auxiliary method for demand. Calculate to which area an opening's coordinates (target) "belong to".
@@ -384,7 +390,7 @@ class CarDataModule(pl.LightningDataModule):
         else:
             dem.loc[:,self.area_centers.index.values] = 0 # Create columns with area names
             dem.loc[:,self.area_centers.index.values] = dem.apply(lambda x: self.coords_to_areas(x), axis=1) # Apply function to all openings
-            dem.loc[:,self.area_centers.index].sum(axis=0) # Aggregate demand in the time window over areas (.loc to remove gps coords and platform). Sum of demand equals to amount of app openings
+            dem = dem.loc[:,self.area_centers.index].sum(axis=0) # Aggregate demand in the time window over areas (.loc to remove gps coords and platform). Sum of demand equals to amount of app openings
             dem['Time'] = self.timepoints[idx]
             return dem
 
@@ -434,20 +440,20 @@ class CarDataset(Dataset):
 
     def state(self, idx):
         # Auxiliary method for __getitem__. Joins vehicle locations and demand
-        dem = self.demand.loc[self.indeces[idx][0]]
+        dem = self.demand.loc[self.indices[idx][0]]
         try:
-            loc = self.locations.loc[self.indeces[idx]]
+            loc = self.locations.loc[self.indices[idx]]
             return torch.hstack(
-                (torch.tensor(self.indeces[idx][0].month), 
-                torch.tensor(self.indeces[idx][0].day), 
-                torch.tensor(self.indeces[idx][0].hour), 
-                dem.values, 
-                loc.values))
+                (torch.tensor(self.indices[idx][0].month), 
+                torch.tensor(self.indices[idx][0].day), 
+                torch.tensor(self.indices[idx][0].hour), 
+                torch.tensor(dem.values), 
+                torch.tensor(loc.values)))
         except KeyError: # Car not available for relocation
             return None
 
     def __len__(self):
-        return len(self.index)
+        return len(self.indices)
 
     def __getitem__(self, idx):
         if idx > self.__len__():

@@ -1,15 +1,13 @@
 from pathlib import Path
-import os
-import numpy as np
 import pandas as pd
 from sklearn.metrics import f1_score
 import torch
 from torch import nn
 import torch.nn.functional as F
 import pytorch_lightning as pl
-from ..data.load_data import FleetDataModule
 
-class BC_FFNN(pl.LightningModule):
+
+class BC_Fleet(pl.LightningModule):
     def __init__(self, hidden_layers=(100, 50), in_out=(603, 555), n_actions:int=5):
         super().__init__()
 
@@ -59,22 +57,35 @@ class BC_FFNN(pl.LightningModule):
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=1e-5)
 
+class BC_Car(pl.LightningModule):
+    def __init__(self, in_out, hidden_layers=(100, 50)):
+        super().__init__()
 
-if __name__ == "__main__":
-    pl.seed_everything(seed=42, workers=True)
-    n_actions = 5
-    dm = FleetDataModule(shuffle_time=True, batch_size=16, num_workers=int(os.cpu_count()/2), n_actions=n_actions)
-    dm.setup(stage='fit')
-    s, a, *_ = next(iter(dm.train_dataloader()))
-    in_size = s.shape[1]
-    out_size = a.shape[1]*a.shape[2]
-    model = BC_FFNN(hidden_layers=(20*in_size, int(10*in_size+5*out_size), 10*out_size), in_out=(in_size, out_size), n_actions=n_actions)
+        self.in_features = in_out[0]
 
-    if torch.cuda.device_count()>0:
-        trainer = pl.Trainer(gpus=-1, precision=16)
-    else:
-        trainer = pl.Trainer(log_every_n_steps=5)
+        self.layers_hidden = []
+        for neurons in hidden_layers:
+            self.layers_hidden.append(nn.Linear(self.in_features, neurons))
+            self.layers_hidden.append(nn.Dropout(0.25))
+            self.layers_hidden.append(nn.ReLU())
+            self.in_features = neurons
 
-    #trainer = pl.Trainer(fast_dev_run=10)
+        self.layers_hidden.append(nn.Linear(hidden_layers[-1], in_out[1]))
+        self.layers_hidden = nn.Sequential(*self.layers_hidden)
 
-    trainer.fit(model, dm)
+    def forward(self, s):
+        a = self.layers_hidden(s.float())
+        return a
+
+    def training_step(self, batch, batch_idx):
+        s, a = batch
+        a_logits = self(s)
+        loss = F.binary_cross_entropy_with_logits(a_logits, a.float())
+        a_pred = torch.zeros_like(a_logits, dtype=torch.int8).scatter(1, torch.argmax(a_logits, dim=1).unsqueeze(1), 1)
+        f1 = f1_score(a.cpu().detach().numpy().reshape(-1), a_pred.cpu().detach().numpy().reshape(-1))
+        self.log('Loss', loss, on_epoch=True, logger=True)
+        self.log('F1 score', f1)
+        return loss
+
+    def configure_optimizers(self):
+        return torch.optim.Adam(self.parameters(), lr=1e-5)
