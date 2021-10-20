@@ -4,15 +4,13 @@ from pathlib import Path
 import glob
 import numpy as np
 import pandas as pd
-from itertools import product
 from datetime import datetime, timedelta
 import torch
 import pytorch_lightning as pl
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, TensorDataset
 from sklearn.model_selection import train_test_split
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
-from itertools import product
 from pyproj import Geod
 from tqdm import tqdm
 
@@ -47,10 +45,10 @@ class FleetDataModule(pl.LightningDataModule):
             self.test_data = FleetDataset(self.test_idx, time_window=self.time_window, n_actions=self.n_actions)
         
     def train_dataloader(self):
-        return DataLoader(self.train_data, batch_size=self.batch_size, num_workers=self.num_workers)
+        return DataLoader(self.train_data, batch_size=self.batch_size, num_workers=self.num_workers, drop_last=True)
     
     def test_dataloader(self):
-        return DataLoader(self.test_data, batch_size=self.batch_size, num_workers=self.num_workers)
+        return DataLoader(self.test_data, batch_size=self.batch_size, num_workers=self.num_workers, drop_last=True)
 
     def prepare_data(self, rental_folder:str='SN rentals', open_folder:str='SN App requests', optimise=False, opt_zones=False, n_zones=50):
         #TODO: Include data download.
@@ -125,7 +123,7 @@ class FleetDataModule(pl.LightningDataModule):
                 (openings['GPS_Longitude'] > swlon) & (openings['GPS_Longitude'] < nelon)]
             openings.to_csv(Path('.') / 'data' / 'processed' / 'openings.csv', index=False)
 
-class FleetDataset(Dataset):
+class FleetDataset(TensorDataset):
     def __init__(self, timepoints, time_window:timedelta, n_actions:int=5):
 
         if not isinstance(timepoints, (list, tuple, set, np.ndarray, pd.Series)):
@@ -218,14 +216,11 @@ class FleetDataset(Dataset):
         return len(self.timepoint)
 
     def __getitem__(self, idx):
-        if idx > self.__len__():
-            return None
-        else:
-            s = self.state(idx) # Returns position of cars in timepoint idx and demand between idx-timedelta and idx
-            a = self.actions(idx) # Returns end position of cars due to service trips within idx-timedelta (only moved cars)
-            s1 = self.state(idx+1) # Returns position of cars in timepoint idx+1 and demand between idx+1-timedelta and idx+1
-            r = self.revenue(idx) # Returns total revenue between idx-timedelta and idx
-            return s, a, s1, r
+        s = self.state(idx) # Returns position of cars in timepoint idx and demand between idx-timedelta and idx
+        a = self.actions(idx) # Returns end position of cars due to service trips within idx-timedelta (only moved cars)
+        s1 = self.state(idx+1) # Returns position of cars in timepoint idx+1 and demand between idx+1-timedelta and idx+1
+        r = self.revenue(idx) # Returns total revenue between idx-timedelta and idx
+        return s, a, s1, r
 
 class CarDataModule(pl.LightningDataModule):
     def __init__(self, batch_size:int=16, time_step:timedelta=timedelta(minutes=30), time_window:timedelta=timedelta(minutes=30),
@@ -246,11 +241,13 @@ class CarDataModule(pl.LightningDataModule):
         self.batch_size = batch_size
         self.time_window = time_window
         self.timepoints = np.arange(time_start, time_end, time_step).astype(datetime)
-        self.prepare_data()
+        self.prepare_data()        
         self.cars = pd.unique(pd.read_csv(Path('.') / 'data' / 'interim' / 'rental.csv', usecols=[0]).iloc[:,0])
-        self.indeces = list(product(self.timepoints, self.cars))
+        self.indices = pd.read_csv((Path('.') / 'data' / 'processed' / 'locations.csv'), low_memory=False)
+        self.indices['Time'] = pd.to_datetime(self.indices['Time'], format='%Y-%m-%d %H:%M')
+        self.indices = pd.MultiIndex.from_frame(self.indices.loc[:,['Time', 'Vehicle_Number_Plate']]).values
 
-        self.train_idx, self.test_idx = train_test_split(self.indeces, test_size=test_size, shuffle=shuffle)
+        self.train_idx, self.test_idx = train_test_split(self.indices, test_size=test_size, shuffle=shuffle)
 
     def setup(self, stage=None):
         if stage in (None, "fit"):
@@ -259,10 +256,10 @@ class CarDataModule(pl.LightningDataModule):
             self.test_data = CarDataset(self.test_idx, time_window=self.time_window)
         
     def train_dataloader(self):
-        return DataLoader(self.train_data, batch_size=self.batch_size, num_workers=self.num_workers)
+        return DataLoader(self.train_data, batch_size=self.batch_size, num_workers=self.num_workers, drop_last=True)
     
     def test_dataloader(self):
-        return DataLoader(self.test_data, batch_size=self.batch_size, num_workers=self.num_workers)
+        return DataLoader(self.test_data, batch_size=self.batch_size, num_workers=self.num_workers, drop_last=True)
 
     def prepare_data(self, rental_folder:str='SN rentals', open_folder:str='SN App requests', optimise=False, opt_zones=False, n_zones=50):
         #TODO: Include data download.
@@ -362,12 +359,10 @@ class CarDataModule(pl.LightningDataModule):
             self.openings = pd.read_csv((Path('.') / 'data' / 'interim' / 'openings.csv'))
             self.openings.loc[:,'Created_Datetime_Local'] = pd.to_datetime(self.openings['Created_Datetime_Local'], format='%Y-%m-%d %H:%M')
 
-            demand_dist = pd.DataFrame(self.demand(0)).T
-            demand_dist.set_index('Time', inplace=True)
-            demand_dist.to_csv(Path('.') / 'data' / 'processed' / 'demand.csv', index=True)
+            pd.DataFrame(pd.Series('Time').append(pd.Series([i for i in range(50)]))).T.to_csv(Path('.') / 'data' / 'processed' / 'demand.csv', header=False, index=False) # Create csv with header
             l = len(self.timepoints)
-            for p in tqdm(range(0, 10)):
-                demand_dist = pd.concat([pd.DataFrame(self.demand(i)).T for i, _ in enumerate(tqdm(self.timepoints[int(l*p/10):int(l*(p+1)/10)], leave=False))])
+            for p in tqdm(range(10)):
+                demand_dist = pd.concat([pd.DataFrame(self.demand(i)).T for i in tqdm(range(int(l*p/10), int(l*(p+1)/10)), leave=False)])
                 demand_dist.set_index('Time', inplace=True)
                 demand_dist.to_csv(Path('.') / 'data' / 'processed' / 'demand.csv', index=True, header=False, mode='a')
                 del demand_dist
@@ -386,7 +381,9 @@ class CarDataModule(pl.LightningDataModule):
         dem = self.openings[(self.openings['Created_Datetime_Local'] > self.timepoints[idx]-self.time_window) &
         (self.openings['Created_Datetime_Local'] <= self.timepoints[idx])].copy()
         if len(dem) == 0:
-            return pd.Series(data=0, index=np.arange(len(self.area_centers)))
+            dem = pd.Series(data=0, index=np.arange(len(self.area_centers)))
+            dem['Time'] = self.timepoints[idx]
+            return dem
         else:
             dem.loc[:,self.area_centers.index.values] = 0 # Create columns with area names
             dem.loc[:,self.area_centers.index.values] = dem.apply(lambda x: self.coords_to_areas(x), axis=1) # Apply function to all openings
@@ -412,7 +409,7 @@ class CarDataModule(pl.LightningDataModule):
         a['Time'] = self.timepoints[idx]
         return a
 
-class CarDataset(Dataset):
+class CarDataset(TensorDataset):
     def __init__(self, indices, time_window:timedelta):
 
         if not isinstance(indices, (list, tuple, set, np.ndarray, pd.Series)):
@@ -441,38 +438,29 @@ class CarDataset(Dataset):
     def state(self, idx):
         # Auxiliary method for __getitem__. Joins vehicle locations and demand
         dem = self.demand.loc[self.indices[idx][0]]
-        try:
-            loc = self.locations.loc[self.indices[idx]]
-            return torch.hstack(
-                (torch.tensor(self.indices[idx][0].month), 
-                torch.tensor(self.indices[idx][0].day), 
-                torch.tensor(self.indices[idx][0].hour), 
-                torch.tensor(dem.values), 
-                torch.tensor(loc.values)))
-        except KeyError: # Car not available for relocation
-            return None
+        loc = self.locations.loc[self.indices[idx]]
+        return torch.hstack(
+            (torch.tensor(self.indices[idx][0].month), 
+            torch.tensor(self.indices[idx][0].day), 
+            torch.tensor(self.indices[idx][0].hour), 
+            torch.tensor(dem.values), 
+            torch.tensor(loc.values)))
 
     def __len__(self):
-        return len(self.indices)
+        return len(self.locations)
 
     def __getitem__(self, idx):
-        if idx > self.__len__():
-            return None
-        else:
-            s = self.state(idx)
-            if s is not None: # Car available for reloaction
-                try:
-                    a = self.actions[self.indices[idx]]
-                except KeyError: # No relocations made
-                    a = torch.zeros(len(self.area_centers), dtype=torch.int8)
-                return s, a
-            else:
-                return None
+        s = self.state(idx)
+        try:
+            a = self.actions[self.indices[idx]]
+        except KeyError: # Car not relocated
+            a = torch.zeros(len(self.area_centers), dtype=torch.int8)
+        return s, a
 
 
 if __name__ == "__main__":
-    dm = CarDataModule(batch_size=1)
+    dm = CarDataModule(batch_size=128)
     dm.setup(stage='fit')
-    s, a= next(iter(dm.train_dataloader()))
+    s, a = next(iter(dm.train_dataloader()))
     print(s, '\n\n')
     print(a, '\n\n')

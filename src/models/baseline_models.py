@@ -74,8 +74,7 @@ class BC_Car(pl.LightningModule):
         self.layers_hidden = nn.Sequential(*self.layers_hidden)
 
     def forward(self, s):
-        a = self.layers_hidden(s.float())
-        return a
+        return self.layers_hidden(s.float())
 
     def training_step(self, batch, batch_idx):
         s, a = batch
