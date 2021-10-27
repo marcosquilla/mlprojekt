@@ -7,7 +7,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 import torch
 import pytorch_lightning as pl
-from torch.utils.data import DataLoader, TensorDataset
+from torch.utils.data import DataLoader, Dataset
 from sklearn.model_selection import train_test_split
 from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
@@ -121,7 +121,7 @@ class FleetDataModule(pl.LightningDataModule):
                 (openings['GPS_Longitude'] > swlon) & (openings['GPS_Longitude'] < nelon)]
             openings.to_csv(Path('.') / 'data' / 'processed' / 'openings.csv', index=False)
 
-class FleetDataset(TensorDataset):
+class FleetDataset(Dataset):
     def __init__(self, timepoints, time_window:timedelta, n_actions:int=5):
 
         if not isinstance(timepoints, (list, tuple, set, np.ndarray, pd.Series)):
@@ -239,11 +239,8 @@ class CarDataModule(pl.LightningDataModule):
         self.batch_size = batch_size
         self.time_window = time_window
         self.timepoints = np.arange(time_start, time_end, time_step).astype(datetime)
-        self.prepare_data()        
-        self.cars = pd.unique(pd.read_csv(Path('.') / 'data' / 'interim' / 'rental.csv', usecols=[0]).iloc[:,0])
-        self.indices = pd.read_csv((Path('.') / 'data' / 'processed' / 'locations.csv'), low_memory=False)
-        self.indices['Time'] = pd.to_datetime(self.indices['Time'], format='%Y-%m-%d %H:%M')
-        self.indices = pd.MultiIndex.from_frame(self.indices.loc[:,['Time', 'Vehicle_Number_Plate']]).values
+        self.prepare_data()
+        self.indices = pd.MultiIndex.from_frame(pd.read_csv((Path('.') / 'data' / 'processed' / 'locations.csv'), usecols=['Time', 'Vehicle_Number_Plate'], parse_dates=['Time'])).reorder_levels([1,0])
 
         self.train_idx, self.test_idx = train_test_split(self.indices, test_size=test_size, shuffle=shuffle)
 
@@ -336,9 +333,7 @@ class CarDataModule(pl.LightningDataModule):
         if not ((Path('.') / 'data' / 'processed' / 'locations.csv').is_file() and
                 (Path('.') / 'data' / 'processed' / 'actions.csv').is_file()):
             print('Creating locations and actions datasets')
-            self.rental = pd.read_csv((Path('.') / 'data' / 'interim' / 'rental.csv'), low_memory=False)
-            self.rental.loc[:,'Start_Datetime_Local'] = pd.to_datetime(self.rental['Start_Datetime_Local'], format='%Y-%m-%d %H:%M')
-            self.rental.loc[:,'End_Datetime_Local'] = pd.to_datetime(self.rental['End_Datetime_Local'], format='%Y-%m-%d %H:%M')
+            self.rental = pd.read_csv((Path('.') / 'data' / 'interim' / 'rental.csv'), parse_dates=['Start_Datetime_Local', 'End_Datetime_Local'],low_memory=False)
             self.rental = pd.get_dummies(self.rental, columns=['Vehicle_Model'])
             self.rental.rename(columns={'Virtual_End_Zone_Name': 'Virtual_Zone_Name'}, inplace=True) # Rename
             self.rental['VZE_ori'] = self.rental['Virtual_Zone_Name'] # Keep original column
@@ -358,13 +353,13 @@ class CarDataModule(pl.LightningDataModule):
             print('Creating demand dataset')
             self.wgs84_geod = Geod(ellps='WGS84') # Distance will be measured in meters on this ellipsoid - more accurate than a spherical method
             self.area_centers = pd.read_csv((Path('.') / 'data' / 'processed' / 'areas.csv'), index_col=0)
-            self.openings = pd.read_csv((Path('.') / 'data' / 'interim' / 'openings.csv'))
-            self.openings.loc[:,'Created_Datetime_Local'] = pd.to_datetime(self.openings['Created_Datetime_Local'], format='%Y-%m-%d %H:%M')
+            self.openings = pd.read_csv((Path('.') / 'data' / 'interim' / 'openings.csv'), parse_dates=['Created_Datetime_Local'])
 
             pd.DataFrame(pd.Series('Time').append(pd.Series([i for i in range(50)]))).T.to_csv(Path('.') / 'data' / 'processed' / 'demand.csv', header=False, index=False) # Create csv with header
             l = len(self.timepoints)
-            for p in tqdm(range(10)):
-                demand_dist = pd.concat([pd.DataFrame(self.demand(i)).T for i in tqdm(range(int(l*p/10), int(l*(p+1)/10)), leave=False)])
+            n_splits = 10 # Number of splits for data saving. Increase for lower RAM usage
+            for p in tqdm(range(n_splits)):
+                demand_dist = pd.concat([pd.DataFrame(self.demand(i)).T for i in tqdm(range(int(l*p/n_splits), int(l*(p+1)/n_splits)), leave=False)])
                 demand_dist.set_index('Time', inplace=True)
                 demand_dist.to_csv(Path('.') / 'data' / 'processed' / 'demand.csv', index=True, header=False, mode='a')
                 del demand_dist
@@ -411,11 +406,9 @@ class CarDataModule(pl.LightningDataModule):
         a['Time'] = self.timepoints[idx]
         return a
 
-class CarDataset(TensorDataset):
+class CarDataset(Dataset):
     def __init__(self, indices, time_window:timedelta):
 
-        if not isinstance(indices, (list, tuple, set, np.ndarray, pd.Series)):
-            raise TypeError("indices is not list-like")
         if not isinstance(time_window, timedelta):
             raise TypeError("time_window is not timedelta")
         
@@ -426,12 +419,10 @@ class CarDataset(TensorDataset):
     def load_data(self):
         self.area_centers = pd.read_csv((Path('.') / 'data' / 'processed' / 'areas.csv'), index_col=0)
         self.demand = pd.read_csv((Path('.') / 'data' / 'processed' / 'demand.csv'), index_col=0)
-        self.locations = pd.read_csv((Path('.') / 'data' / 'processed' / 'locations.csv'), low_memory=False)
-        self.actions = pd.read_csv((Path('.') / 'data' / 'processed' / 'actions.csv'), low_memory=False)
+        self.locations = pd.read_csv((Path('.') / 'data' / 'processed' / 'locations.csv'), parse_dates=['Time'])
+        self.actions = pd.read_csv((Path('.') / 'data' / 'processed' / 'actions.csv'), parse_dates=['Time'])
 
         self.demand.index = pd.to_datetime(self.demand.index, format='%Y-%m-%d %H:%M')
-        self.locations['Time'] = pd.to_datetime(self.locations['Time'], format='%Y-%m-%d %H:%M')
-        self.actions['Time'] = pd.to_datetime(self.actions['Time'], format='%Y-%m-%d %H:%M')
         self.locations.index = pd.MultiIndex.from_frame(self.locations.loc[:,['Time', 'Vehicle_Number_Plate']])
         self.actions.index = pd.MultiIndex.from_frame(self.actions.loc[:,['Time', 'Vehicle_Number_Plate']])
         self.locations.drop(labels=['Time', 'Vehicle_Number_Plate'], axis=1, inplace=True)

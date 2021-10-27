@@ -18,21 +18,21 @@ def Fleet_train(n_actions=5):
     return model, dm
 
 def Car_train():
-    dm = CarDataModule(shuffle=True, batch_size=32, num_workers=2)
     area_centers = pd.read_csv((Path('.') / 'data' / 'processed' / 'areas.csv'), index_col=0)
-    in_size = int(3+len(dm.cars)+len(area_centers))
+    cars = pd.unique(pd.read_csv(Path('.') / 'data' / 'interim' / 'rental.csv', usecols=[2]).iloc[:,0])
+    in_size = int(3+len(cars)+2*len(area_centers))
     out_size = len(area_centers)
-    model = BC_Car(hidden_layers=(30*in_size, int(15*in_size+5*out_size), 10*out_size), in_out=(in_size, out_size))
+    dm = CarDataModule(shuffle=True, batch_size=16, num_workers=0)
+    model = BC_Car(hidden_layers=(3*in_size, int(1.5*in_size+0.5*out_size), 1*out_size), in_out=(in_size, out_size))
     return model, dm
 
 if __name__ == "__main__":
     pl.seed_everything(seed=42, workers=True)
+    fdr = 10
     if torch.cuda.device_count()>0:
-        trainer = pl.Trainer(gpus=-1, precision=16)
+        trainer = pl.Trainer(gpus=-1, precision=16, fast_dev_run=fdr, weights_summary='full')
     else:
-        trainer = pl.Trainer(log_every_n_steps=5)
-
-    trainer = pl.Trainer(fast_dev_run=10)
+        trainer = pl.Trainer(log_every_n_steps=5, fast_dev_run=fdr, weights_summary='full')
 
     model, dm = Car_train()
     trainer.fit(model, dm)
