@@ -14,8 +14,6 @@ from sklearn.metrics import silhouette_score
 from pyproj import Geod
 from tqdm import tqdm
 
-#TODO: Time_window vs time_delta tuning
-
 class FleetDataModule(pl.LightningDataModule):
     def __init__(self, batch_size:int=16, time_step:timedelta=timedelta(minutes=30), time_window:timedelta=timedelta(minutes=30),
     time_start=datetime(2020, 2, 1, 0, 56, 26), time_end=datetime(2021, 5, 3, 23, 59, 55), 
@@ -272,6 +270,7 @@ class CarDataModule(pl.LightningDataModule):
         if not ((Path('.') / 'data' / 'interim' / 'rental.csv').is_file() and 
                 (Path('.') / 'data' / 'processed' / 'areas.csv').is_file()):
             if not (Path('.') / 'data' / 'interim' / 'rental_join.csv').is_file():
+                print('Joining rental data')
                 rent_files = glob.glob(str((Path('.') / 'data' / 'raw' / rental_folder / '*.xlsx')))
                 rent_dfs = [pd.read_excel(f, skiprows=[0,1]) for f in rent_files]
                 rental = pd.concat(rent_dfs,ignore_index=True)
@@ -323,6 +322,7 @@ class CarDataModule(pl.LightningDataModule):
             areas.to_csv(Path('.') / 'data' / 'processed' / 'areas.csv')
 
         if not (Path('.') / 'data' / 'interim' / 'openings.csv').is_file():
+            print('Joining openings data')
             open_files = glob.glob(str((Path('.') / 'data' / 'raw' / open_folder / '*.csv')))
             open_dfs = [pd.read_csv(f) for f in open_files]
             openings = pd.concat(open_dfs,ignore_index=True)
@@ -335,6 +335,7 @@ class CarDataModule(pl.LightningDataModule):
 
         if not ((Path('.') / 'data' / 'processed' / 'locations.csv').is_file() and
                 (Path('.') / 'data' / 'processed' / 'actions.csv').is_file()):
+            print('Creating locations and actions datasets')
             self.rental = pd.read_csv((Path('.') / 'data' / 'interim' / 'rental.csv'), low_memory=False)
             self.rental.loc[:,'Start_Datetime_Local'] = pd.to_datetime(self.rental['Start_Datetime_Local'], format='%Y-%m-%d %H:%M')
             self.rental.loc[:,'End_Datetime_Local'] = pd.to_datetime(self.rental['End_Datetime_Local'], format='%Y-%m-%d %H:%M')
@@ -354,6 +355,7 @@ class CarDataModule(pl.LightningDataModule):
             del self.rental, locations, actions
         
         if not (Path('.') / 'data' / 'processed' / 'demand.csv').is_file():
+            print('Creating demand dataset')
             self.wgs84_geod = Geod(ellps='WGS84') # Distance will be measured in meters on this ellipsoid - more accurate than a spherical method
             self.area_centers = pd.read_csv((Path('.') / 'data' / 'processed' / 'areas.csv'), index_col=0)
             self.openings = pd.read_csv((Path('.') / 'data' / 'interim' / 'openings.csv'))
