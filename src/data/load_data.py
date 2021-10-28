@@ -49,7 +49,6 @@ class FleetDataModule(pl.LightningDataModule):
         return DataLoader(self.test_data, batch_size=self.batch_size, num_workers=self.num_workers, drop_last=True)
 
     def prepare_data(self, rental_folder:str='SN rentals', open_folder:str='SN App requests', optimise=False, opt_zones=False, n_zones=50):
-        #TODO: Include data download.
         # Limits of modelling
         swlat=55.4355410101663
         swlon=12.140848911388979
@@ -257,7 +256,6 @@ class CarDataModule(pl.LightningDataModule):
         return DataLoader(self.test_data, batch_size=self.batch_size, num_workers=self.num_workers, drop_last=True)
 
     def prepare_data(self, rental_folder:str='SN rentals', open_folder:str='SN App requests', optimise=False, opt_zones=False, n_zones=50):
-        #TODO: Include data download.
         # Limits of modelling
         swlat=55.4355410101663
         swlon=12.140848911388979
@@ -448,12 +446,5 @@ class CarDataset(Dataset):
             a = self.actions[self.indices[idx]]
         except KeyError: # Car not relocated
             a = torch.zeros(len(self.area_centers), dtype=torch.int8)
+            a[torch.argmax(s[-len(self.area_centers):])] = 1 # Move to current location
         return s, a
-
-
-if __name__ == "__main__":
-    dm = CarDataModule(batch_size=128)
-    dm.setup(stage='fit')
-    s, a = next(iter(dm.train_dataloader()))
-    print(s, '\n\n')
-    print(a, '\n\n')

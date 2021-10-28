@@ -6,8 +6,6 @@ import torch.nn.functional as F
 import pytorch_lightning as pl
 from sklearn.metrics import f1_score
 
-#TODO: Implement test_step and argparse
-
 class BC_Fleet(pl.LightningModule):
     def __init__(self, hidden_layers=(100, 50), in_out=(603, 555), n_actions:int=5):
         super().__init__()
@@ -59,10 +57,11 @@ class BC_Fleet(pl.LightningModule):
         return torch.optim.Adam(self.parameters(), lr=1e-5)
 
 class BC_Car(pl.LightningModule):
-    def __init__(self, in_out, hidden_layers=(100, 50)):
+    def __init__(self, in_out, hidden_layers=(100, 50), lr=1e-5):
         super().__init__()
 
         self.in_features = in_out[0]
+        self.lr = lr
 
         self.layers_hidden = []
         for neurons in hidden_layers:
@@ -81,14 +80,13 @@ class BC_Car(pl.LightningModule):
         s, a = batch
         a_logits = self(s)
         loss = F.binary_cross_entropy_with_logits(a_logits, a.float())
-        a_pred = torch.zeros_like(a_logits, dtype=torch.int8).scatter(1, torch.argmax(a_logits, dim=1).unsqueeze(1), 1)
-        f1 = f1_score(a.cpu().detach().numpy().reshape(-1), a_pred.cpu().detach().numpy().reshape(-1))
+        acc = torch.argmax(a_logits, dim=1)==torch.argmax(a, dim=1)
         self.log('Loss', loss, on_epoch=True, logger=True)
-        self.log('F1 score', f1)
+        self.log('Accuracy', acc.sum()/len(acc), on_epoch=True, logger=True)
         return loss
 
     def configure_optimizers(self):
-        return torch.optim.Adam(self.parameters(), lr=1e-5)
+        return torch.optim.Adam(self.parameters(), lr=self.lr)
 
 class BalanceModel(pl.LightningModule):
     def __init__(self, hidden_layers_policy=[50, 20], hidden_layers_Q=[50, 20],
@@ -141,10 +139,6 @@ class BalanceModel(pl.LightningModule):
         # Logging to TensorBoard by default
         self.log("Q_loss/y-1", Qloss/y-1)
         return Qloss/y-1
-
-    def test_step(self):
-        #TODO: Implement
-        return 
 
     def configure_optimizers(self):
         optimizer_policy = torch.optim.Adam(self.policy.parameters(), lr=self.lr_policy)
