@@ -4,7 +4,7 @@ import pandas as pd
 import torch
 import pytorch_lightning as pl
 from .models import BC_Fleet, BC_Car
-from ..data.load_data import FleetDataModule, CarDataModule
+from ..data.datamodules import FleetDataModule, CarDataModule
 import warnings
 
 #TODO: Time_window vs time_delta tuning. Test step. Data download.
@@ -38,7 +38,7 @@ def main(args):
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser = pl.Trainer.add_argparse_args(parser)
-    parser.add_argument('--batch_size', default=1024, type=int)
+    parser.add_argument('--batch_size', default=128, type=int)
     parser.add_argument('--lr', default=2e-4, type=float)
     parser.add_argument('--num_workers', default=0, type=int)
     parser.add_argument('--shuffle', action='store_true')
