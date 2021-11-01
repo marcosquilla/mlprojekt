@@ -63,9 +63,10 @@ class BC_Car(pl.LightningModule):
         super().__init__()
 
         self.in_features = in_out[0]
+        self.n_areas = in_out[1]
         self.lr = lr
         self.l2 = l2
-
+         
         self.layers_hidden = []
         for neurons in hidden_layers:
             self.layers_hidden.append(nn.Linear(self.in_features, neurons))
@@ -73,8 +74,10 @@ class BC_Car(pl.LightningModule):
             self.layers_hidden.append(nn.ReLU())
             self.in_features = neurons
 
-        self.layers_hidden.append(nn.Linear(hidden_layers[-1], in_out[1]))
+        self.layers_hidden.append(nn.Linear(hidden_layers[-1], self.n_areas))
         self.layers_hidden = nn.Sequential(*self.layers_hidden)
+        
+        self.save_hyperparameters()
 
     def forward(self, s):
         return self.layers_hidden(s.float())
@@ -83,10 +86,19 @@ class BC_Car(pl.LightningModule):
         s, a = batch
         a_logits = self(s)
         loss = F.binary_cross_entropy_with_logits(a_logits, a.float())
-        acc = torch.argmax(a_logits, dim=1)==torch.argmax(a, dim=1)
+        acc = torch.argmax(a_logits, dim=1)==torch.argmax(a, dim=1) # Total accuracy
+        acc_dif = acc[torch.argmax(s[-len(self.n_areas):], dim=1)!=torch.argmax(a, dim=1)] # Accuracy only where cars were moved
         self.log('Loss', loss, on_epoch=True, logger=True)
-        self.log('Accuracy', acc.sum()/len(acc), on_epoch=True, logger=True)
+        self.log('Accuracy total', acc.sum()/len(acc), on_epoch=True, logger=True)
+        self.log('Accuracy moves only', acc_dif.sum()/len(acc_dif), on_epoch=True, logger=True)
         return loss
+
+    def test_step(self, batch, batch_idx):
+        acc = torch.argmax(self(s), dim=1)==torch.argmax(a, dim=1) # Total accuracy
+        acc_dif = acc[torch.argmax(s[-len(self.n_areas):], dim=1)!=torch.argmax(a, dim=1)] # Accuracy only where cars were moved
+        self.log('Accuracy total', acc.sum()/len(acc), on_epoch=True, logger=True)
+        self.log('Accuracy moves only', acc_dif.sum()/len(acc_dif), on_epoch=True, logger=True)
+        return {'Accuracy total': acc.sum()/len(acc), 'Accuracy moves only': acc_dif.sum()/len(acc_dif)}
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=self.l2)
