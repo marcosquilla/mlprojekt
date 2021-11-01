@@ -139,12 +139,12 @@ class CarDataset(Dataset):
             torch.tensor(loc.values)))
 
     def __len__(self):
-        return len(self.locations)
+        return len(self.indices)
 
     def __getitem__(self, idx):
         s = self.state(idx)
         try:
-            a = self.actions[self.indices[idx]]
+            a = self.actions[self.indices[idx-1]]
         except KeyError: # Car not relocated
             a = torch.zeros(len(self.area_centers), dtype=torch.int8)
             a[torch.argmax(s[-len(self.area_centers):])] = 1 # Move to current location

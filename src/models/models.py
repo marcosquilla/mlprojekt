@@ -7,10 +7,12 @@ import pytorch_lightning as pl
 from sklearn.metrics import f1_score
 
 class BC_Fleet(pl.LightningModule):
-    def __init__(self, hidden_layers=(100, 50), in_out=(603, 555), n_actions:int=5):
+    def __init__(self, hidden_layers=(100, 50), in_out=(603, 555), n_actions:int=5, lr=1e-5, l2=1e-5):
         super().__init__()
 
         self.in_features = in_out[0]
+        self.lr = lr
+        self.l2 = l2
 
         self.layers_hidden = []
         for neurons in hidden_layers:
@@ -54,14 +56,15 @@ class BC_Fleet(pl.LightningModule):
         return loss
 
     def configure_optimizers(self):
-        return torch.optim.Adam(self.parameters(), lr=1e-5)
+        return torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=self.l2)
 
 class BC_Car(pl.LightningModule):
-    def __init__(self, in_out, hidden_layers=(100, 50), lr=1e-5):
+    def __init__(self, in_out, hidden_layers=(100, 50), lr=1e-5, l2=1e-5):
         super().__init__()
 
         self.in_features = in_out[0]
         self.lr = lr
+        self.l2 = l2
 
         self.layers_hidden = []
         for neurons in hidden_layers:
@@ -86,7 +89,7 @@ class BC_Car(pl.LightningModule):
         return loss
 
     def configure_optimizers(self):
-        return torch.optim.Adam(self.parameters(), lr=self.lr)
+        return torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=self.l2)
 
 class BalanceModel(pl.LightningModule):
     def __init__(self, hidden_layers_policy=[50, 20], hidden_layers_Q=[50, 20],
