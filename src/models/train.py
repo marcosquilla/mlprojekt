@@ -5,7 +5,7 @@ from pathlib import Path
 import pandas as pd
 import pytorch_lightning as pl
 from .models import BC_Fleet, BC_Car
-from ..data.datamodules import FleetDataModule, CarDataModule
+from src.data.datamodules import FleetDataModule, CarDataModule
 import warnings
 
 #TODO: Time_window vs time_delta tuning. Test step. Data download.
@@ -60,7 +60,7 @@ if __name__ == "__main__":
     parser.add_argument('--l2', default=1e-5, type=float, help='L2 regularisation used in training')
     parser.add_argument('--num_workers', default=0, type=int, help='Number of workers for DataLoader. If using GPU, might raise error when greater than 0')
     parser.add_argument('--shuffle', action='store_true', help='Shuffle data before splitting in train-test sets')
-    parser.add_argument('--seed', default=42, type=int, help='Random seed')
+    parser.add_argument('--seed', default=42, type=int, help='Set random seed')
     parser.add_argument('--load_version', type=int, help='Load specific version from lightning_logs/version_#/checkpoint/. Loads latest checkpoint to test or continue training')
     parser.add_argument('--fit', action='store_true', help='Fit model from start or checkpoint')
     parser.add_argument('--test', action='store_true', help='Test model. If --fit, will test after fitting. If --load_version, will test after loading the checkpoint')

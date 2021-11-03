@@ -126,6 +126,7 @@ class CarDataset(Dataset):
         self.actions.index = pd.MultiIndex.from_frame(self.actions.loc[:,['Time', 'Vehicle_Number_Plate']])
         self.locations.drop(labels=['Time', 'Vehicle_Number_Plate'], axis=1, inplace=True)
         self.actions.drop(labels=['Time', 'Vehicle_Number_Plate'], axis=1, inplace=True)
+        self.actions.sort_index(inplace=True)
 
     def state(self, idx):
         # Auxiliary method for __getitem__. Joins vehicle locations and demand
@@ -144,7 +145,7 @@ class CarDataset(Dataset):
     def __getitem__(self, idx):
         s = self.state(idx)
         try:
-            a = self.actions[self.indices[idx-1]]
+            a = torch.tensor(self.actions.loc[self.indices[idx]].values).squeeze()
         except KeyError: # Car not relocated
             a = torch.zeros(len(self.area_centers), dtype=torch.int8)
             a[torch.argmax(s[-len(self.area_centers):])] = 1 # Move to current location

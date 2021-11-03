@@ -10,7 +10,7 @@ from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 from pyproj import Geod
 from tqdm import tqdm
-from .datasets import FleetDataset, CarDataset
+from src.data.datasets import FleetDataset, CarDataset
 
 class FleetDataModule(pl.LightningDataModule):
     def __init__(self, batch_size:int=16, time_step:timedelta=timedelta(minutes=30), time_window:timedelta=timedelta(minutes=30),
@@ -244,7 +244,7 @@ class CarDataModule(pl.LightningDataModule):
             actions = pd.concat([self.actions(i).loc[:,cols_act] for i, _ in enumerate(tqdm(self.timepoints))])
             actions.to_csv(Path('.') / 'data' / 'processed' / 'actions.csv', index=False)
 
-            del self.rental, locations, actions
+            del self.rental, actions, locations
         
         if not (Path('.') / 'data' / 'processed' / 'demand.csv').is_file():
             print('Creating demand dataset')
@@ -299,6 +299,6 @@ class CarDataModule(pl.LightningDataModule):
         a = self.rental[(self.rental['Servicedrive_YN']==1) &
                         (self.rental['Start_Datetime_Local'] >= self.timepoints[idx]-self.time_window) &
                         (self.rental['End_Datetime_Local'] < self.timepoints[idx])]
-        a = a[a['Virtual_Start_Zone_Name'] != a['VZE_ori']]
+        a = a[a['Virtual_Start_Zone_Name'] != a['VZE_ori']].iloc[:1]
         a['Time'] = self.timepoints[idx]
         return a

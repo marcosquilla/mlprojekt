@@ -87,17 +87,20 @@ class BC_Car(pl.LightningModule):
         a_logits = self(s)
         loss = F.binary_cross_entropy_with_logits(a_logits, a.float())
         acc = torch.argmax(a_logits, dim=1)==torch.argmax(a, dim=1) # Total accuracy
-        acc_dif = acc[torch.argmax(s[-len(self.n_areas):], dim=1)!=torch.argmax(a, dim=1)] # Accuracy only where cars were moved
+        acc_dif = acc[torch.argmax(s[:,-self.n_areas:], dim=1)!=torch.argmax(a, dim=1)] # Accuracy only where cars were moved
         self.log('Loss', loss, on_epoch=True, logger=True)
         self.log('Accuracy total', acc.sum()/len(acc), on_epoch=True, logger=True)
-        self.log('Accuracy moves only', acc_dif.sum()/len(acc_dif), on_epoch=True, logger=True)
+        if len(acc_dif)>0:
+            self.log('Accuracy moves only', acc_dif.sum()/len(acc_dif), on_epoch=True, logger=True)
         return loss
 
     def test_step(self, batch, batch_idx):
+        s, a = batch
         acc = torch.argmax(self(s), dim=1)==torch.argmax(a, dim=1) # Total accuracy
-        acc_dif = acc[torch.argmax(s[-len(self.n_areas):], dim=1)!=torch.argmax(a, dim=1)] # Accuracy only where cars were moved
+        acc_dif = acc[torch.argmax(s[:,-self.n_areas:], dim=1)!=torch.argmax(a, dim=1)] # Accuracy only where cars were moved
         self.log('Accuracy total', acc.sum()/len(acc), on_epoch=True, logger=True)
-        self.log('Accuracy moves only', acc_dif.sum()/len(acc_dif), on_epoch=True, logger=True)
+        if len(acc_dif)>0:
+            self.log('Accuracy moves only', acc_dif.sum()/len(acc_dif), on_epoch=True, logger=True)
         return {'Accuracy total': acc.sum()/len(acc), 'Accuracy moves only': acc_dif.sum()/len(acc_dif)}
 
     def configure_optimizers(self):
