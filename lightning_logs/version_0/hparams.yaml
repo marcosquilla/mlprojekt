@@ -1,9 +1,0 @@
-hidden_layers: !!python/tuple
-- 3420
-- 1960
-- 500
-in_out: !!python/tuple
-- 114
-- 50
-l2: 1.0e-05
-lr: 0.0002

@@ -1,19 +1,19 @@
-from pathlib import Path
-import pandas as pd
 import torch
 from torch import nn
 import torch.nn.functional as F
 import pytorch_lightning as pl
-from sklearn.metrics import f1_score
+from torchmetrics import F1
 
-class BC_Fleet(pl.LightningModule):
-    def __init__(self, hidden_layers=(100, 50), in_out=(603, 555), n_actions:int=5, lr=1e-5, l2=1e-5):
+class BC_Car_s1(pl.LightningModule): # Step 1: Decide to move or not
+    def __init__(self, in_size, hidden_layers=(100, 50), lr=1e-5, l2=1e-5):
         super().__init__()
 
-        self.in_features = in_out[0]
+        self.in_features = in_size
         self.lr = lr
         self.l2 = l2
-
+        self.f1_train = F1(num_classes=2)
+        self.f1_test = F1(num_classes=2)
+         
         self.layers_hidden = []
         for neurons in hidden_layers:
             self.layers_hidden.append(nn.Linear(self.in_features, neurons))
@@ -21,44 +21,33 @@ class BC_Fleet(pl.LightningModule):
             self.layers_hidden.append(nn.ReLU())
             self.in_features = neurons
 
-        self.layers_hidden.append(nn.Linear(hidden_layers[-1], in_out[1]))
+        self.layers_hidden.append(nn.Linear(hidden_layers[-1], 1))
         self.layers_hidden = nn.Sequential(*self.layers_hidden)
-
-        self.n_areas = len(pd.read_csv((Path('.') / 'data' / 'processed' / 'areas.csv'), index_col=0))
-        self.n_actions = n_actions
+        
+        self.save_hyperparameters()
 
     def forward(self, s):
-        a = self.layers_hidden(s.float())
-        a = a.reshape(a.shape[0], self.n_actions, -1)
-        a_pred = torch.zeros_like(a)
-        a_pred[:, :, :-2*self.n_areas] = F.softmax(a[:, :, :-2*self.n_areas], dim=2) #Car
-        a_pred[:, :, -2*self.n_areas:-self.n_areas] = F.softmax(a[:, :, -2*self.n_areas:-self.n_areas], dim=2) #Origin
-        a_pred[:, :, -self.n_areas:] = F.softmax(a[:, :, -self.n_areas:], dim=2) #Destination
-        return a_pred
+        return self.layers_hidden(s.float())
 
     def training_step(self, batch, batch_idx):
-        s, a, *_ = batch
+        s, a = batch
         a_logits = self(s)
-        loss_car = F.binary_cross_entropy_with_logits(a_logits[:, :, :-2*self.n_areas], a[:, :, :-2*self.n_areas].float())
-        loss_origin = F.binary_cross_entropy_with_logits(a_logits[:, :, -2*self.n_areas:-self.n_areas], a[:, :, -2*self.n_areas:-self.n_areas].float())
-        loss_destination = F.binary_cross_entropy_with_logits(a_logits[:, :, -self.n_areas:], a[:, :, -self.n_areas:].float())
-        loss = loss_car + loss_origin + loss_destination
-        self.log('Loss', loss, on_epoch=True, logger=True)
-        a_pred = torch.zeros_like(a_logits, dtype=torch.int8).scatter(2, torch.argmax(a_logits[:, :, :-2*self.n_areas], dim=2).unsqueeze(1), 1)
-        a_pred = a_pred.scatter(2, a_pred.shape[2]-2*self.n_areas+torch.argmax(a_logits[:, :, -2*self.n_areas:-self.n_areas], dim=2).unsqueeze(1), 1)
-        a_pred = a_pred.scatter(2, a_pred.shape[2]-self.n_areas+torch.argmax(a_logits[:, :, -self.n_areas:], dim=2).unsqueeze(1), 1)
-        f1_cars = f1_score(a[:, :, :-2*self.n_areas].cpu().detach().numpy().reshape(-1), a_pred[:, :, :-2*self.n_areas].cpu().detach().numpy().reshape(-1))
-        f1_origin = f1_score(a[:, :, -2*self.n_areas:-self.n_areas].cpu().detach().numpy().reshape(-1), a_pred[:, :, -2*self.n_areas:-self.n_areas].cpu().detach().numpy().reshape(-1))
-        f1_destination = f1_score(a[:, :, -self.n_areas:].cpu().detach().numpy().reshape(-1), a_pred[:, :, -self.n_areas:].cpu().detach().numpy().reshape(-1))
-        self.log('F1 cars', f1_cars)
-        self.log('F1 origin', f1_origin)
-        self.log('F1 destination', f1_destination)
+        loss = F.binary_cross_entropy_with_logits(a_logits.squeeze(), a.float(), pos_weight=torch.tensor(1000))
+        self.f1_train(torch.argmax(a_logits, dim=1), a)
+        self.log('Loss', loss, on_step=True, on_epoch=False, logger=True)
+        self.log('F1 score', self.f1_train, on_step=True, on_epoch=False, logger=True)
         return loss
+
+    def test_step(self, batch, batch_idx):
+        s, a = batch
+        self.f1_test(torch.argmax(self(s), dim=1), torch.argmax(a, dim=1))
+        self.log('Accuracy total', self.f1, on_epoch=True, on_step=True, logger=True)
+        return {'F1 score': self.f1_test}
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=self.l2)
 
-class BC_Car(pl.LightningModule):
+class BC_Car_s2(pl.LightningModule): # Step 2: Decide where to move, given that it was decided to move
     def __init__(self, in_out, hidden_layers=(100, 50), lr=1e-5, l2=1e-5):
         super().__init__()
 
@@ -87,21 +76,15 @@ class BC_Car(pl.LightningModule):
         a_logits = self(s)
         loss = F.binary_cross_entropy_with_logits(a_logits, a.float())
         acc = torch.argmax(a_logits, dim=1)==torch.argmax(a, dim=1) # Total accuracy
-        acc_dif = acc[torch.argmax(s[:,-self.n_areas:], dim=1)!=torch.argmax(a, dim=1)] # Accuracy only where cars were moved
         self.log('Loss', loss, on_epoch=True, logger=True)
-        self.log('Accuracy total', acc.sum()/len(acc), on_epoch=True, logger=True)
-        if len(acc_dif)>0:
-            self.log('Accuracy moves only', acc_dif.sum()/len(acc_dif), on_epoch=True, logger=True)
+        self.log('Accuracy', acc.sum()/len(acc), on_epoch=True, logger=True)
         return loss
 
     def test_step(self, batch, batch_idx):
         s, a = batch
         acc = torch.argmax(self(s), dim=1)==torch.argmax(a, dim=1) # Total accuracy
-        acc_dif = acc[torch.argmax(s[:,-self.n_areas:], dim=1)!=torch.argmax(a, dim=1)] # Accuracy only where cars were moved
-        self.log('Accuracy total', acc.sum()/len(acc), on_epoch=True, logger=True)
-        if len(acc_dif)>0:
-            self.log('Accuracy moves only', acc_dif.sum()/len(acc_dif), on_epoch=True, logger=True)
-        return {'Accuracy total': acc.sum()/len(acc), 'Accuracy moves only': acc_dif.sum()/len(acc_dif)}
+        self.log('Accuracy', acc.sum()/len(acc), on_epoch=True, logger=True)
+        return {'Accuracy': acc.sum()/len(acc)}
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=self.l2)

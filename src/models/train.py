@@ -4,57 +4,78 @@ from argparse import ArgumentParser
 from pathlib import Path
 import pandas as pd
 import pytorch_lightning as pl
-from .models import BC_Fleet, BC_Car
-from src.data.datamodules import FleetDataModule, CarDataModule
+from .models import BC_Car_s1, BC_Car_s2
+from src.data.datamodules import CarDataModule_s1, CarDataModule_s2
 import warnings
 
-#TODO: Time_window vs time_delta tuning. Test step. Data download.
+#TODO: Time_window vs time_delta tuning. Data download.
 
-def Fleet_train(batch_size=8, num_workers=0, n_actions=5, shuffle=True):
-    dm = FleetDataModule(shuffle_time=shuffle, batch_size=batch_size, num_workers=num_workers, n_actions=n_actions)
-    dm.setup(stage='fit')
-    s, a, *_ = next(iter(dm.train_dataloader()))
-    in_size = s.shape[1]
-    out_size = a.shape[1]*a.shape[2]
-    model = BC_Fleet(hidden_layers=(20*in_size, int(10*in_size+5*out_size), 10*out_size), in_out=(in_size, out_size), n_actions=n_actions)
+def Car_train_s1(batch_size, lr, l2, num_workers, shuffle, ckpt=None):
+    dm = CarDataModule_s1(shuffle=shuffle, batch_size=batch_size, num_workers=num_workers)
+    area_centers = pd.read_csv((Path('.') / 'data' / 'processed' / 'areas.csv'), index_col=0)
+    cars = pd.unique(pd.read_csv(Path('.') / 'data' / 'interim' / 'rental.csv', usecols=[2]).iloc[:,0])
+    in_size = int(3+len(cars)+2*len(area_centers)) # Date, car models and locations, and demand
+    if ckpt is None:
+        model = BC_Car_s1(hidden_layers=(30*in_size, 20*in_size, 10*in_size), in_size=in_size, lr=lr, l2=l2)
+    else:
+        model = BC_Car_s1.load_from_checkpoint(ckpt)
     return model, dm
 
-def Car_train(batch_size, lr, l2, num_workers, shuffle, ckpt=None):
-    dm = CarDataModule(shuffle=shuffle, batch_size=batch_size, num_workers=num_workers)
+def Car_train_s2(batch_size, lr, l2, num_workers, shuffle, ckpt=None):
+    dm = CarDataModule_s2(shuffle=shuffle, batch_size=batch_size, num_workers=num_workers)
     area_centers = pd.read_csv((Path('.') / 'data' / 'processed' / 'areas.csv'), index_col=0)
     cars = pd.unique(pd.read_csv(Path('.') / 'data' / 'interim' / 'rental.csv', usecols=[2]).iloc[:,0])
     in_size = int(3+len(cars)+2*len(area_centers)) # Date, car models and locations, and demand
     out_size = len(area_centers)
     if ckpt is None:
-        model = BC_Car(hidden_layers=(30*in_size, int(15*in_size+5*out_size), 10*out_size), in_out=(in_size, out_size), lr=lr, l2=l2)
+        model = BC_Car_s2(hidden_layers=(30*in_size, int(15*in_size+5*out_size), 10*out_size), in_out=(in_size, out_size), lr=lr, l2=l2)
     else:
-        model = BC_Car.load_from_checkpoint(ckpt)
+        model = BC_Car_s2.load_from_checkpoint(ckpt)
     return model, dm
 
-def main(args):
-    pl.seed_everything(seed=args.seed, workers=True)
-    if args.load_version is not None:
-        ckpt_path = (Path('.') / 'lightning_logs' / str('version_' + str(args.load_version)) / 'checkpoints' / '*.ckpt')
-        ckpt = (Path('.') / max(glob.glob(str(ckpt_path)), key=os.path.getmtime))
-    else:
-        ckpt = None
-        
-    model, dm = Car_train(batch_size=args.batch_size, lr=args.lr, l2=args.l2, num_workers=args.num_workers, shuffle=args.shuffle, ckpt=ckpt)
-    if ckpt is None:
-        trainer = pl.Trainer.from_argparse_args(args)
-    else:
-        trainer = pl.Trainer(resume_from_checkpoint=ckpt)
-
+def run_stage(args, stage, trainer, model, dm):
+    setattr(trainer, '_default_root_dir', trainer.default_root_dir + '/' + stage)
+    ckpt = get_ckpt_path(stage)
     if args.fit:
         if args.auto_lr_find or (args.auto_scale_batch_size is not None):
             trainer.tune(model, dm)
-        trainer.fit(model, dm)
+        if ckpt is None:
+            trainer.fit(model, dm)
+        else:
+            trainer.fit(model, dm, ckpt_path=ckpt)
     if args.test:
-        trainer.test(model, dm)
+        if ckpt is None or args.fit:
+            trainer.test(model, dm)
+        else:
+            trainer.test(model, dm, ckpt_path=ckpt)
 
+def get_ckpt_path(stage):
+    if args.load_version is not None:
+        ckpt_path = (Path('.') / 'models' / stage / 'lightning_logs' / str('version_' + str(args.load_version)) / 'checkpoints' / '*.ckpt')
+        return Path('.') / max(glob.glob(str(ckpt_path)), key=os.path.getmtime)
+    else:
+        return None
+
+def main(args):
+    pl.seed_everything(seed=args.seed, workers=True)
+
+    if args.s1:
+        model_s1, dm_s1 = Car_train_s1(batch_size=args.batch_size, lr=args.lr, l2=args.l2,
+         num_workers=args.num_workers, shuffle=args.shuffle, ckpt=get_ckpt_path("stage_1"))
+        trainer_s1 = pl.Trainer.from_argparse_args(args)
+        run_stage(args, "stage_1", trainer_s1, model_s1, dm_s1)
+    if args.s2:
+        model_s2, dm_s2 = Car_train_s2(batch_size=args.batch_size, lr=args.lr, l2=args.l2,
+         num_workers=args.num_workers, shuffle=args.shuffle, ckpt=get_ckpt_path("stage_2"))
+        trainer_s2 = pl.Trainer.from_argparse_args(args)
+        run_stage(args, "stage_2", trainer_s2, model_s2, dm_s2)
+
+    
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser = pl.Trainer.add_argparse_args(parser)
+    save_dir = Path('.') / "models"
+    parser.set_defaults(default_root_dir=str(save_dir))
     parser.add_argument('--batch_size', default=128, type=int, help='Batch size used in the datamodule. Will be ignored if --auto_scale_batch_size')
     parser.add_argument('--lr', default=2e-4, type=float, help='Learning rate used in training. Will be ignored if --auto_lr_find')
     parser.add_argument('--l2', default=1e-5, type=float, help='L2 regularisation used in training')
@@ -64,6 +85,8 @@ if __name__ == "__main__":
     parser.add_argument('--load_version', type=int, help='Load specific version from lightning_logs/version_#/checkpoint/. Loads latest checkpoint to test or continue training')
     parser.add_argument('--fit', action='store_true', help='Fit model from start or checkpoint')
     parser.add_argument('--test', action='store_true', help='Test model. If --fit, will test after fitting. If --load_version, will test after loading the checkpoint')
+    parser.add_argument('--s1', action='store_true', help='Use stage 1')
+    parser.add_argument('--s2', action='store_true', help='Use stage 2')
     args = parser.parse_args()
     warnings.filterwarnings(action="ignore", category=pl.utilities.warnings.LightningDeprecationWarning)
 
