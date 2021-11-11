@@ -32,7 +32,7 @@ class CarDataModule_s1(pl.LightningDataModule):
         self.time_window = time_window
         self.timepoints = np.arange(time_start, time_end, time_step).astype(datetime)
         self.prepare_data(n_zones=n_zones)
-        self.indices = pd.MultiIndex.from_frame(pd.read_csv((Path('.') / 'data' / 'processed' / 'locations.csv'), usecols=['Time', 'Vehicle_Number_Plate'], parse_dates=['Time'])).reorder_levels([1,0])
+        self.indices = pd.read_csv((Path('.') / 'data' / 'processed' / 'locations.csv'), usecols=['Time', 'Vehicle_Number_Plate'], parse_dates=['Time'])[['Time', 'Vehicle_Number_Plate']]
 
         self.train_idx, self.test_idx = train_test_split(self.indices, test_size=test_size, shuffle=shuffle)
 
