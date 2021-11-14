@@ -1,4 +1,5 @@
 import os
+from copy import deepcopy
 import glob
 from argparse import ArgumentParser
 from pathlib import Path
@@ -33,9 +34,11 @@ def Car_train_s2(batch_size, lr, l2, num_workers, shuffle, ckpt=None):
         model = BC_Car_s2.load_from_checkpoint(ckpt)
     return model, dm
 
-def run_stage(args, stage, trainer, model, dm):
-    setattr(trainer, '_default_root_dir', trainer.default_root_dir + '/' + stage)
+def run_stage(args, stage, model, dm):
     ckpt = get_ckpt_path(stage)
+    args_trainer = deepcopy(args)
+    args_trainer.default_root_dir = args.default_root_dir + '/' + stage
+    trainer = pl.Trainer.from_argparse_args(args_trainer)
     if args.fit:
         if args.auto_lr_find or (args.auto_scale_batch_size is not None):
             trainer.tune(model, dm)
@@ -58,17 +61,14 @@ def get_ckpt_path(stage):
 
 def main(args):
     pl.seed_everything(seed=args.seed, workers=True)
-
     if args.s1:
         model_s1, dm_s1 = Car_train_s1(batch_size=args.batch_size, lr=args.lr, l2=args.l2,
          num_workers=args.num_workers, shuffle=args.shuffle, ckpt=get_ckpt_path("stage_1"))
-        trainer_s1 = pl.Trainer.from_argparse_args(args)
-        run_stage(args, "stage_1", trainer_s1, model_s1, dm_s1)
+        run_stage(args, "stage_1", model_s1, dm_s1)
     if args.s2:
         model_s2, dm_s2 = Car_train_s2(batch_size=args.batch_size, lr=args.lr, l2=args.l2,
          num_workers=args.num_workers, shuffle=args.shuffle, ckpt=get_ckpt_path("stage_2"))
-        trainer_s2 = pl.Trainer.from_argparse_args(args)
-        run_stage(args, "stage_2", trainer_s2, model_s2, dm_s2)
+        run_stage(args, "stage_2", model_s2, dm_s2)
 
     
 if __name__ == "__main__":
@@ -77,9 +77,9 @@ if __name__ == "__main__":
     save_dir = Path('.') / "models"
     parser.set_defaults(default_root_dir=str(save_dir))
     parser.add_argument('--batch_size', default=128, type=int, help='Batch size used in the datamodule. Will be ignored if --auto_scale_batch_size')
-    parser.add_argument('--lr', default=2e-4, type=float, help='Learning rate used in training. Will be ignored if --auto_lr_find')
+    parser.add_argument('--lr', default=1e-6, type=float, help='Learning rate used in training. Will be ignored if --auto_lr_find')
     parser.add_argument('--l2', default=1e-5, type=float, help='L2 regularisation used in training')
-    parser.add_argument('--num_workers', default=0, type=int, help='Number of workers for DataLoader. If using GPU, might raise error when greater than 0')
+    parser.add_argument('--num_workers', default=0, type=int, help='Number of workers for DataLoader')
     parser.add_argument('--shuffle', action='store_true', help='Shuffle data before splitting in train-test sets')
     parser.add_argument('--seed', default=42, type=int, help='Set random seed')
     parser.add_argument('--load_version', type=int, help='Load specific version from lightning_logs/version_#/checkpoint/. Loads latest checkpoint to test or continue training')

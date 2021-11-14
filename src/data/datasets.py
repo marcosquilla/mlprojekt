@@ -4,7 +4,7 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset
 
-class CarDataset_s1(Dataset):
+class CarDataset_s1(Dataset): # Add information about where other cars are
     def __init__(self, indices, time_window:timedelta):
 
         if not isinstance(time_window, timedelta):
@@ -26,7 +26,7 @@ class CarDataset_s1(Dataset):
         self.demand = self.demand.to_dict('index') # Convert for faster indexing
         self.actions = pd.MultiIndex.from_frame(self.actions.loc[:,['Time', 'Vehicle_Number_Plate']]) # MultiIndex faster
         self.locations.drop(labels=['Time', 'Vehicle_Number_Plate'], axis=1, inplace=True)
-        self.locations = tuple(self.locations.values) # Convert for faster indexing
+        self.locations = self.locations.values # Convert for faster indexing
 
     def state(self, idx):
         # Auxiliary method for __getitem__. Joins vehicle locations and demand
@@ -48,13 +48,14 @@ class CarDataset_s1(Dataset):
         return s, a
 
 
-class CarDataset_s2(Dataset):
+class CarDataset_s2(Dataset): 
     def __init__(self, indices, time_window:timedelta):
 
         if not isinstance(time_window, timedelta):
             raise TypeError("time_window is not timedelta")
         
-        self.indices = indices
+        self.Tindices = indices.values.tolist()
+        self.indices = indices.index
         self.time_window = time_window
         self.load_data()        
 
@@ -65,27 +66,28 @@ class CarDataset_s2(Dataset):
         self.actions = pd.read_csv((Path('.') / 'data' / 'processed' / 'actions.csv'), parse_dates=['Time'])
 
         self.demand.index = pd.to_datetime(self.demand.index, format='%Y-%m-%d %H:%M')
-        self.locations.index = pd.MultiIndex.from_frame(self.locations.loc[:,['Time', 'Vehicle_Number_Plate']])
-        self.actions.index = pd.MultiIndex.from_frame(self.actions.loc[:,['Time', 'Vehicle_Number_Plate']])
-        self.locations.drop(labels=['Time', 'Vehicle_Number_Plate'], axis=1, inplace=True)
+        self.demand = self.demand.to_dict('index') # Convert for faster indexing
         self.actions.drop(labels=['Time', 'Vehicle_Number_Plate'], axis=1, inplace=True)
-        self.actions.sort_index(inplace=True)
+        self.actions = self.actions.values
+        self.locations.index = pd.MultiIndex.from_frame(self.locations.loc[:,['Time', 'Vehicle_Number_Plate']])
+        self.locations.drop(labels=['Time', 'Vehicle_Number_Plate'], axis=1, inplace=True)
+        self.locations.sort_index(inplace=True)
 
     def state(self, idx):
         # Auxiliary method for __getitem__. Joins vehicle locations and demand
-        dem = self.demand.loc[self.indices[idx][0]]
-        loc = self.locations.loc[self.indices[idx]]
+        dem = tuple(self.demand[self.Tindices[idx][0]].values()) # Use the list for faster indexing
+        loc = self.locations.loc[self.Tindices[idx][0], self.Tindices[idx][1]].values #TODO: Check locations vs actions inconsistency (< vs <=?)
         return torch.hstack(
-            (torch.tensor(self.indices[idx][0].month), 
-            torch.tensor(self.indices[idx][0].day), 
-            torch.tensor(self.indices[idx][0].hour), 
-            torch.tensor(dem.values), 
-            torch.tensor(loc.values)))
+            (torch.tensor(self.Tindices[idx][0].month), 
+            torch.tensor(self.Tindices[idx][0].day), 
+            torch.tensor(self.Tindices[idx][0].hour), 
+            torch.tensor(dem), 
+            torch.tensor(loc)))
 
     def __len__(self):
         return len(self.indices)
 
     def __getitem__(self, idx):
         s = self.state(idx)
-        a = torch.tensor(self.actions.loc[self.indices[idx]].values).squeeze()
+        a = torch.tensor(self.actions[self.indices[idx]])
         return s, a
