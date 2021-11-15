@@ -90,6 +90,7 @@ class CarDataset_s2(Dataset):
             torch.tensor(self.Tindices[idx][0].day), 
             torch.tensor(self.Tindices[idx][0].hour), 
             torch.tensor(dem), 
+            torch.tensor(count),
             torch.tensor(loc)))
 
     def __len__(self):
