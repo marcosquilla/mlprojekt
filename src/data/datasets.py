@@ -4,7 +4,9 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset
 
-class CarDataset_s1(Dataset): # Add information about where other cars are
+#TODO: Add information about where specific car models are.
+
+class CarDataset_s1(Dataset): 
     def __init__(self, indices, time_window:timedelta):
 
         if not isinstance(time_window, timedelta):
@@ -26,17 +28,21 @@ class CarDataset_s1(Dataset): # Add information about where other cars are
         self.demand = self.demand.to_dict('index') # Convert for faster indexing
         self.actions = pd.MultiIndex.from_frame(self.actions.loc[:,['Time', 'Vehicle_Number_Plate']]) # MultiIndex faster
         self.locations.drop(labels=['Time', 'Vehicle_Number_Plate'], axis=1, inplace=True)
+        self.vehicle_counts = self.locations.loc[:, self.locations.columns[self.locations.columns.str.contains('Zone')]].groupby('Time').sum()
+        self.vehicle_counts = self.vehicle_counts.to_dict('index') # Convert for faster indexing
         self.locations = self.locations.values # Convert for faster indexing
 
     def state(self, idx):
         # Auxiliary method for __getitem__. Joins vehicle locations and demand
         dem = tuple(self.demand[self.Tindices[idx][0]].values()) # Use the list for faster indexing
+        count = tuple(self.vehicle_counts[self.Tindices[idx][0]].values()) # Use the list for faster indexing
         loc = self.locations[self.indices[idx]] # Use list for faster indexing
         return torch.hstack(
             (torch.tensor(self.Tindices[idx][0].month), 
             torch.tensor(self.Tindices[idx][0].day), 
             torch.tensor(self.Tindices[idx][0].hour), 
-            torch.tensor(dem), 
+            torch.tensor(dem),
+            torch.tensor(count), 
             torch.tensor(loc)))
 
     def __len__(self):
@@ -46,7 +52,6 @@ class CarDataset_s1(Dataset): # Add information about where other cars are
         s = self.state(idx)
         a = torch.tensor(self.Mindices[idx] in self.actions).long() # Faster to check with MultiIndex
         return s, a
-
 
 class CarDataset_s2(Dataset): 
     def __init__(self, indices, time_window:timedelta):
@@ -71,12 +76,15 @@ class CarDataset_s2(Dataset):
         self.actions = self.actions.values
         self.locations.index = pd.MultiIndex.from_frame(self.locations.loc[:,['Time', 'Vehicle_Number_Plate']])
         self.locations.drop(labels=['Time', 'Vehicle_Number_Plate'], axis=1, inplace=True)
+        self.vehicle_counts = self.locations.loc[:, self.locations.columns[self.locations.columns.str.contains('Zone')]].groupby('Time').sum()
+        self.vehicle_counts = self.vehicle_counts.to_dict('index') # Convert for faster indexing
         self.locations.sort_index(inplace=True)
 
     def state(self, idx):
         # Auxiliary method for __getitem__. Joins vehicle locations and demand
         dem = tuple(self.demand[self.Tindices[idx][0]].values()) # Use the list for faster indexing
-        loc = self.locations.loc[self.Tindices[idx][0], self.Tindices[idx][1]].values #TODO: Check locations vs actions inconsistency (< vs <=?)
+        count = tuple(self.vehicle_counts[self.Tindices[idx][0]].values()) # Use the list for faster indexing
+        loc = self.locations.loc[self.Tindices[idx][0], self.Tindices[idx][1]].values
         return torch.hstack(
             (torch.tensor(self.Tindices[idx][0].month), 
             torch.tensor(self.Tindices[idx][0].day), 
