@@ -9,16 +9,17 @@ from src.models.models import BC_Car_s1, BC_Car_s2
 from src.data.datamodules import CarDataModule
 import warnings
 
-#TODO: Time_window vs time_delta tuning. Data download.
+# TODO: Time_window vs time_delta tuning. Data download.
+# https://towardsdatascience.com/building-a-neural-network-on-amazon-sagemaker-with-pytorch-lightning-63730ec740ea
 
-def get_ckpt_path(stage):
+def get_ckpt_path(args, stage):
     if args.load_version is not None:
         ckpt_path = (Path('.') / 'models' / stage / 'lightning_logs' / str('version_' + str(args.load_version)) / 'checkpoints' / '*.ckpt')
         return Path('.') / max(glob.glob(str(ckpt_path)), key=os.path.getmtime)
     else:
         return None
 
-def car_train(s, batch_size, lr, l2, num_workers, shuffle, ckpt=None):
+def setup_model_dm(s, batch_size, lr, l2, num_workers, shuffle, ckpt=None):
     dm = CarDataModule(s=s, shuffle=shuffle, batch_size=batch_size, num_workers=num_workers)
     area_centers = pd.read_csv((Path('.') / 'data' / 'processed' / 'areas.csv'), index_col=0)
     cars = pd.unique(pd.read_csv(Path('.') / 'data' / 'interim' / 'rental.csv', usecols=[2]).iloc[:,0])
@@ -26,23 +27,28 @@ def car_train(s, batch_size, lr, l2, num_workers, shuffle, ckpt=None):
     out_size = len(area_centers)
     if s == 'stage_1':
         if ckpt is None:
-            model = BC_Car_s1(hidden_layers=(30*in_size, 20*in_size, 10*in_size), in_size=in_size, lr=lr, l2=l2)
+            t = len(pd.read_csv(Path('.') / 'data' / 'processed' / 'locations.csv', usecols=[0]))
+            o = len(pd.read_csv(Path('.') / 'data' / 'processed' / 'actions.csv', usecols=[0]))
+            pos_weight = (t-o)/o
+            model = BC_Car_s1(hidden_layers=(30*in_size, 20*in_size, 10*in_size),
+             in_size=in_size, lr=lr, l2=l2, pos_weight=pos_weight)
         else:
             model = BC_Car_s1.load_from_checkpoint(ckpt)
     elif s == 'stage_2':
         if ckpt is None:
-            model = BC_Car_s2(hidden_layers=(30*in_size, int(15*in_size+5*out_size), 10*out_size), in_out=(in_size, out_size), lr=lr, l2=l2)
+            model = BC_Car_s2(hidden_layers=(30*in_size, int(15*in_size+5*out_size), 10*out_size),
+             in_out=(in_size, out_size), lr=lr, l2=l2)
         else:
             model = BC_Car_s2.load_from_checkpoint(ckpt)
     return model, dm
 
 def run_stage(args, stage):
-    ckpt = get_ckpt_path(stage)
+    ckpt = get_ckpt_path(args, stage)
     args_trainer = deepcopy(args)
     args_trainer.default_root_dir = args.default_root_dir + '/' + stage
     trainer = pl.Trainer.from_argparse_args(args_trainer)
-    model, dm = car_train(s=stage, batch_size=args.batch_size, lr=args.lr, l2=args.l2, 
-        num_workers=args.num_workers, shuffle=args.shuffle, ckpt=get_ckpt_path(stage))
+    model, dm = setup_model_dm(s=stage, batch_size=args.batch_size, lr=args.lr, l2=args.l2, 
+        num_workers=args.num_workers, shuffle=args.shuffle, ckpt=ckpt)
     if args.fit:
         if args.auto_lr_find or (args.auto_scale_batch_size is not None):
             trainer.tune(model, dm)

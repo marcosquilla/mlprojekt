@@ -153,7 +153,7 @@ class CarDataModule(pl.LightningDataModule):
             self.area_centers = pd.read_csv((Path('.') / 'data' / 'processed' / 'areas.csv'), index_col=0)
             self.openings = pd.read_csv((Path('.') / 'data' / 'interim' / 'openings.csv'), parse_dates=['Created_Datetime_Local'])
 
-            pd.DataFrame(pd.Series('Time').append(pd.Series([i for i in range(50)]))).T.to_csv(Path('.') / 'data' / 'processed' / 'demand.csv', header=False, index=False) # Create csv with header
+            pd.DataFrame(pd.Series('Time').append(pd.Series([i for i in range(len(self.area_centers))]))).T.to_csv(Path('.') / 'data' / 'processed' / 'demand.csv', header=False, index=False) # Create csv with header
             l = len(self.timepoints)
             n_splits = 10 # Number of splits for data saving. Increase for lower RAM usage
             for p in tqdm(range(n_splits)):

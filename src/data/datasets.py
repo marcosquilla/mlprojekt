@@ -21,15 +21,15 @@ class CarDataset_s1(Dataset):
     def load_data(self):
         self.area_centers = pd.read_csv((Path('.') / 'data' / 'processed' / 'areas.csv'), index_col=0)
         self.demand = pd.read_csv((Path('.') / 'data' / 'processed' / 'demand.csv'), index_col=0)
-        self.locations = pd.read_csv((Path('.') / 'data' / 'processed' / 'locations.csv'))
+        self.locations = pd.read_csv((Path('.') / 'data' / 'processed' / 'locations.csv'), parse_dates=['Time'])
         self.actions = pd.read_csv((Path('.') / 'data' / 'processed' / 'actions.csv'), parse_dates=['Time'])
 
         self.demand.index = pd.to_datetime(self.demand.index, format='%Y-%m-%d %H:%M')
         self.demand = self.demand.to_dict('index') # Convert for faster indexing
         self.actions = pd.MultiIndex.from_frame(self.actions.loc[:,['Time', 'Vehicle_Number_Plate']]) # MultiIndex faster
-        self.locations.drop(labels=['Time', 'Vehicle_Number_Plate'], axis=1, inplace=True)
-        self.vehicle_counts = self.locations.loc[:, self.locations.columns[self.locations.columns.str.contains('Zone')]].groupby('Time').sum()
+        self.vehicle_counts = self.locations.groupby('Time')[self.locations.columns[self.locations.columns.str.contains('Zone')]].sum()
         self.vehicle_counts = self.vehicle_counts.to_dict('index') # Convert for faster indexing
+        self.locations.drop(labels=['Time', 'Vehicle_Number_Plate'], axis=1, inplace=True)
         self.locations = self.locations.values # Convert for faster indexing
 
     def state(self, idx):

@@ -5,7 +5,7 @@ import pytorch_lightning as pl
 from torchmetrics import F1
 
 class BC_Car_s1(pl.LightningModule): # Step 1: Decide to move or not
-    def __init__(self, in_size, hidden_layers=(100, 50), lr=1e-5, l2=1e-5):
+    def __init__(self, in_size, hidden_layers=(100, 50), lr=1e-5, l2=1e-5, pos_weight=1000):
         super().__init__()
 
         self.in_features = in_size
@@ -13,6 +13,7 @@ class BC_Car_s1(pl.LightningModule): # Step 1: Decide to move or not
         self.l2 = l2
         self.f1_train = F1(num_classes=1)
         self.f1_test = F1(num_classes=1)
+        self.pos_weight = pos_weight
          
         self.layers_hidden = []
         for neurons in hidden_layers:
@@ -32,7 +33,7 @@ class BC_Car_s1(pl.LightningModule): # Step 1: Decide to move or not
     def training_step(self, batch, batch_idx):
         s, a = batch
         a_logits = self(s).squeeze()
-        loss = F.binary_cross_entropy_with_logits(a_logits, a.float(), pos_weight=torch.tensor(1000)) #TODO: Parametrise weight
+        loss = F.binary_cross_entropy_with_logits(a_logits, a.float(), pos_weight=torch.tensor(self.pos_weight))
         self.f1_train(torch.round(torch.sigmoid(a_logits)), a)
         self.log('Loss', loss, on_step=True, on_epoch=False, logger=True)
         self.log('F1 score', self.f1_train, on_step=True, on_epoch=False, logger=True)
