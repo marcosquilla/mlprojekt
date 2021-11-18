@@ -30,7 +30,7 @@ def setup_model_dm(s, batch_size, lr, l2, num_workers, shuffle, ckpt=None):
             t = len(pd.read_csv(Path('.') / 'data' / 'processed' / 'locations.csv', usecols=[0]))
             o = len(pd.read_csv(Path('.') / 'data' / 'processed' / 'actions.csv', usecols=[0]))
             pos_weight = (t-o)/o
-            model = BC_Car_s1(hidden_layers=(30*in_size, 20*in_size, 10*in_size),
+            model = BC_Car_s1(hidden_layers=(60*in_size, 30*in_size, 15*in_size),
              in_size=in_size, lr=lr, l2=l2, pos_weight=pos_weight)
         else:
             model = BC_Car_s1.load_from_checkpoint(ckpt)
@@ -77,7 +77,7 @@ if __name__ == "__main__":
     parser.set_defaults(default_root_dir=str(save_dir))
     parser.add_argument('--batch_size', default=128, type=int, help='Batch size used in the datamodule. Will be ignored if --auto_scale_batch_size')
     parser.add_argument('--lr', default=1e-6, type=float, help='Learning rate used in training. Will be ignored if --auto_lr_find')
-    parser.add_argument('--l2', default=1e-5, type=float, help='L2 regularisation used in training')
+    parser.add_argument('--l2', default=1e-6, type=float, help='L2 regularisation used in training')
     parser.add_argument('--num_workers', default=0, type=int, help='Number of workers for DataLoader')
     parser.add_argument('--shuffle', action='store_true', help='Shuffle data before splitting in train-test sets')
     parser.add_argument('--seed', default=42, type=int, help='Set random seed')

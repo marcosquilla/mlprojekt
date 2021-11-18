@@ -76,8 +76,8 @@ class BC_Car_s2(pl.LightningModule): # Step 2: Decide where to move, given that 
         a_logits = self(s)
         loss = F.binary_cross_entropy_with_logits(a_logits, a.float())
         acc = torch.argmax(a_logits, dim=1)==torch.argmax(a, dim=1) # Total accuracy
-        self.log('Loss', loss, on_epoch=False, on_step=True, logger=True)
-        self.log('Accuracy', acc.sum()/len(acc), on_epoch=False, on_step=True, logger=True)
+        self.log('Loss', loss, on_epoch=True, on_step=False, logger=True)
+        self.log('Accuracy', acc.sum()/len(acc), on_epoch=True, on_step=False, logger=True)
         return loss
 
     def test_step(self, batch, batch_idx):

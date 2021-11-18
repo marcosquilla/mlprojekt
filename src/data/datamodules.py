@@ -38,7 +38,9 @@ class CarDataModule(pl.LightningDataModule):
             self.indices = pd.read_csv((Path('.') / 'data' / 'processed' / 'locations.csv'), usecols=['Time', 'Vehicle_Number_Plate'], parse_dates=['Time'])[['Time', 'Vehicle_Number_Plate']]
             self.dataset = CarDataset_s1
         elif s == 'stage_2':
-            self.indices = pd.read_csv((Path('.') / 'data' / 'processed' / 'actions.csv'), usecols=['Time', 'Vehicle_Number_Plate'], parse_dates=['Time'])[['Time', 'Vehicle_Number_Plate']]
+            l = pd.read_csv((Path('.') / 'data' / 'processed' / 'locations.csv'), usecols=['Time', 'Vehicle_Number_Plate'], parse_dates=['Time'])[['Time', 'Vehicle_Number_Plate']]
+            a = pd.read_csv((Path('.') / 'data' / 'processed' / 'actions.csv'), usecols=['Time', 'Vehicle_Number_Plate'], parse_dates=['Time'])[['Time', 'Vehicle_Number_Plate']]
+            self.indices = pd.merge(a,l,how='inner', on=['Time', 'Vehicle_Number_Plate'])
             self.dataset = CarDataset_s2
         
         self.train_idx, self.test_idx = train_test_split(self.indices, test_size=test_size, shuffle=shuffle)
@@ -131,7 +133,7 @@ class CarDataModule(pl.LightningDataModule):
         if not ((Path('.') / 'data' / 'processed' / 'locations.csv').is_file() and
                 (Path('.') / 'data' / 'processed' / 'actions.csv').is_file()):
             print('Creating locations and actions datasets')
-            self.rental = pd.read_csv((Path('.') / 'data' / 'interim' / 'rental.csv'), parse_dates=['Start_Datetime_Local', 'End_Datetime_Local'],low_memory=False)
+            self.rental = pd.read_csv((Path('.') / 'data' / 'interim' / 'rental.csv'), parse_dates=['Start_Datetime_Local', 'End_Datetime_Local'], low_memory=False)
             self.rental = pd.get_dummies(self.rental, columns=['Vehicle_Model'])
             self.rental.rename(columns={'Virtual_End_Zone_Name': 'Virtual_Zone_Name'}, inplace=True) # Rename
             self.rental['VZE_ori'] = self.rental['Virtual_Zone_Name'] # Keep original column
@@ -198,8 +200,8 @@ class CarDataModule(pl.LightningDataModule):
     def actions(self, idx):
         # Auxiliary method for __getitem__. Calculates actions
         a = self.rental[(self.rental['Servicedrive_YN']==1) &
-                        (self.rental['Start_Datetime_Local'] > self.timepoints[idx]-self.time_window) &
-                        (self.rental['End_Datetime_Local'] <= self.timepoints[idx])]
+                        (self.rental['Start_Datetime_Local'] > self.timepoints[idx]) &
+                        (self.rental['Start_Datetime_Local'] <= self.timepoints[idx]+self.time_window)]
         a = a[a['Virtual_Start_Zone_Name'] != a['VZE_ori']].iloc[:1]
         a['Time'] = self.timepoints[idx]
         return a
