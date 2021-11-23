@@ -10,17 +10,15 @@ from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 from pyproj import Geod
 from tqdm import tqdm
-from src.data.datasets import CarDataset_s1, CarDataset_s2
+from src.data.datasets import CarDataset_s1, CarDataset_s2, DayDataset_s1
 
 class CarDataModule(pl.LightningDataModule):
-    def __init__(self, s, batch_size:int=16, time_step:timedelta=timedelta(minutes=30), time_window:timedelta=timedelta(minutes=30),
-    time_start=datetime(2020, 2, 1, 0, 56, 26), time_end=datetime(2021, 5, 3, 23, 59, 55), 
+    def __init__(self, s, lstm, batch_size:int=16, time_step:timedelta=timedelta(minutes=30), time_window:timedelta=timedelta(minutes=30),
+    time_start=datetime(2020, 2, 2, 0, 0, 0), time_end=datetime(2021, 5, 3, 23, 59, 59), 
     test_size=0.2, shuffle=False, num_workers=0, n_zones=20):
         super().__init__()
 
         assert s == 'stage_1' or s == 'stage_2', 'Unknown stage'
-        if not isinstance(batch_size, int):
-            raise TypeError("batch_size has to be integer")
         if not isinstance(time_step, timedelta):
             raise TypeError("time_step is not timedelta")
         if not isinstance(time_start, datetime):
@@ -36,20 +34,23 @@ class CarDataModule(pl.LightningDataModule):
 
         if s == 'stage_1':
             self.indices = pd.read_csv((Path('.') / 'data' / 'processed' / 'locations.csv'), usecols=['Time', 'Vehicle_Number_Plate'], parse_dates=['Time'])[['Time', 'Vehicle_Number_Plate']]
-            self.dataset = CarDataset_s1
+            if lstm:
+                self.dataset = DayDataset_s1
+            else:
+                self.dataset = CarDataset_s1
         elif s == 'stage_2':
             l = pd.read_csv((Path('.') / 'data' / 'processed' / 'locations.csv'), usecols=['Time', 'Vehicle_Number_Plate'], parse_dates=['Time'])[['Time', 'Vehicle_Number_Plate']]
             a = pd.read_csv((Path('.') / 'data' / 'processed' / 'actions.csv'), usecols=['Time', 'Vehicle_Number_Plate'], parse_dates=['Time'])[['Time', 'Vehicle_Number_Plate']]
-            self.indices = pd.merge(a,l,how='inner', on=['Time', 'Vehicle_Number_Plate'])
+            self.indices = pd.merge(a,l,how='inner',on=['Time', 'Vehicle_Number_Plate'])
             self.dataset = CarDataset_s2
         
         self.train_idx, self.test_idx = train_test_split(self.indices, test_size=test_size, shuffle=shuffle)
 
     def setup(self, stage=None):
         if stage in (None, "fit"):
-            self.train_data = self.dataset(self.train_idx, time_window=self.time_window)
+            self.train_data = self.dataset(self.train_idx)
         if stage in (None, "test"):
-            self.test_data = self.dataset(self.test_idx, time_window=self.time_window)
+            self.test_data = self.dataset(self.test_idx)
         
     def train_dataloader(self):
         return DataLoader(self.train_data, batch_size=self.batch_size, num_workers=self.num_workers, drop_last=True)
@@ -174,7 +175,6 @@ class CarDataModule(pl.LightningDataModule):
         return pd.Series(1 - dists / sum(dists)) / (len(dists) - 1) # Percentage of how much an opening belongs to each area
 
     def demand(self, idx):
-        # Auxiliary method for __getitem__. Returns the demand of all areas at some point in time.
         dem = self.openings[(self.openings['Created_Datetime_Local'] > self.timepoints[idx]-self.time_window) &
         (self.openings['Created_Datetime_Local'] <= self.timepoints[idx])].copy()
         if len(dem) == 0:
@@ -189,7 +189,6 @@ class CarDataModule(pl.LightningDataModule):
             return dem
 
     def vehicle_locations(self, idx):
-        # Auxiliary method for __getitem__.
         loc = self.rental[self.rental['End_Datetime_Local'] <= self.timepoints[idx]]
         loc = loc.drop_duplicates(subset='Vehicle_Number_Plate', keep='last') # Keep the last location
         current_trips = self.rental[(self.rental['Start_Datetime_Local'] < self.timepoints[idx]) & (self.rental['End_Datetime_Local'] >= self.timepoints[idx])] # Cars in use
@@ -198,7 +197,6 @@ class CarDataModule(pl.LightningDataModule):
         return loc
 
     def actions(self, idx):
-        # Auxiliary method for __getitem__. Calculates actions
         a = self.rental[(self.rental['Servicedrive_YN']==1) &
                         (self.rental['Start_Datetime_Local'] > self.timepoints[idx]) &
                         (self.rental['Start_Datetime_Local'] <= self.timepoints[idx]+self.time_window)]
