@@ -169,8 +169,8 @@ class CarDataModule(pl.LightningDataModule):
     def coords_to_areas(self, target):
         # Auxiliary method for demand. Calculate to which area an opening's coordinates (target) "belong to".
         _,_,dists = self.wgs84_geod.inv(
-            self.area_centers['GPS_Latitude'], self.area_centers['GPS_Longitude'],
-            np.full(len(self.area_centers),target['GPS_Latitude']), np.full(len(self.area_centers),target['GPS_Longitude']))
+            self.area_centers['GPS_Longitude'], self.area_centers['GPS_Latitude'],
+            np.full(len(self.area_centers),target['GPS_Longitude']), np.full(len(self.area_centers),target['GPS_Latitude']))
         return pd.Series(1 - dists / sum(dists)) / (len(dists) - 1) # Percentage of how much an opening belongs to each area
 
     def demand(self, idx):
