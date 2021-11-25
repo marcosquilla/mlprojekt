@@ -19,8 +19,8 @@ def get_ckpt_path(args, stage):
     else:
         return None
 
-def setup_model_dm(s, batch_size, lr, l2, num_workers, shuffle, ckpt=None):
-    dm = CarDataModule(s=s, shuffle=shuffle, batch_size=batch_size, num_workers=num_workers)
+def setup_model_dm(s, lstm, batch_size, lr, l2, num_workers, shuffle, ckpt=None):
+    dm = CarDataModule(s=s, lstm=lstm, shuffle=shuffle, batch_size=batch_size, num_workers=num_workers)
     area_centers = pd.read_csv((Path('.') / 'data' / 'processed' / 'areas.csv'), index_col=0)
     cars = pd.unique(pd.read_csv(Path('.') / 'data' / 'interim' / 'rental.csv', usecols=[2]).iloc[:,0])
     in_size = int(3+len(cars)+3*len(area_centers)) # Date, car model and location (current), amount of cars in all zones, and demand
@@ -47,7 +47,7 @@ def run_stage(args, stage):
     args_trainer = deepcopy(args)
     args_trainer.default_root_dir = args.default_root_dir + '/' + stage
     trainer = pl.Trainer.from_argparse_args(args_trainer)
-    model, dm = setup_model_dm(s=stage, batch_size=args.batch_size, lr=args.lr, l2=args.l2, 
+    model, dm = setup_model_dm(s=stage, lstm=args.lstm, batch_size=args.batch_size, lr=args.lr, l2=args.l2, 
         num_workers=args.num_workers, shuffle=args.shuffle, ckpt=ckpt)
     if args.fit:
         if args.auto_lr_find or (args.auto_scale_batch_size is not None):
@@ -86,6 +86,7 @@ if __name__ == "__main__":
     parser.add_argument('--test', action='store_true', help='Test model. If --fit, will test after fitting. If --load_version, will test after loading the checkpoint')
     parser.add_argument('--s1', action='store_true', help='Use stage 1')
     parser.add_argument('--s2', action='store_true', help='Use stage 2')
+    parser.add_argument('--lstm', action='store_true', help='Use LSTM model')
     args = parser.parse_args()
     warnings.filterwarnings(action="ignore", category=pl.utilities.warnings.LightningDeprecationWarning)
 
