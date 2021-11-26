@@ -114,3 +114,7 @@ bin/
 
 # Mac OS-specific storage files
 .DS_Store
+
+# HPC stuff
+bsub.sh
+*.err
