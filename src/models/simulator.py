@@ -15,6 +15,7 @@ class sim():
         self.dist2reve = 2*self.dist2time  # Factor to get revenue from distance
         self.max_dist = 500 # Maximum distance from request to area (walking distance)
         self.max_cars = 1000 # Max cars per area
+        self.revenue = 0
 
         self.area_centers = pd.read_csv((Path('.') / 'data' / 'processed' / 'areas.csv'), index_col=0)
         self.openings = pd.read_csv((Path('.') / 'data' / 'interim' / 'openings.csv'), parse_dates=['Created_Datetime_Local'])
@@ -38,8 +39,8 @@ class sim():
                     self.max_cars, 
                     i) for i, coords in self.area_centers.iterrows()]
 
-    def get_revenue(self, idx):
-        revenue = 0
+    def step(self, idx): # idx only to get statistical data
+        self.revenue = 0
         requests = self.openings[(self.openings['Created_Datetime_Local']>=self.timepoints[idx]) & (self.openings['Created_Datetime_Local']<self.timepoints[idx+1])]
         for _, request in requests.iterrows():
             _,_,dists = wgs84_geod.inv(
@@ -47,40 +48,54 @@ class sim():
                     np.full(len(self.area_centers),request['GPS_Longitude']), np.full(len(self.area_centers),request['GPS_Latitude']))
             ca = np.argmin(dists) # Closest area
             if dists[ca]<=self.max_dist:
-                revenue += self.areas[ca].depart(self.dest.get_group((
-                    self,
+                self.revenue += self.areas[ca].depart(self, self.dest.get_group((
                     self.timepoints[idx].month, 
                     self.timepoints[idx].weekday, 
                     self.timepoints[idx].hour, 
-                    ca)), request['Created_Datetime_Local'])
-        return revenue
+                    ca)).sample(1), request['Created_Datetime_Local'])
+
+    def get_revenue(self):
+        return self.revenue
+
+    def get_state(self, idx): # idx only to see available cars
+        time = self.timepoints[idx]
+        locs = np.array([
+            [[a.name]*len(a.available_cars(time)), 
+            a.cars[a.available_cars(time),1].tolist(),
+            a.cars[a.available_cars(time),2].tolist()] for a in self.areas]) # [[Location][Plate][Model]]
+        return locs
+
+    def move_car(self, origin, dest, model):
+        self.areas[origin].depart(self, self.areas[dest], model=model)
 
 class area(): # Contains area properties and states. Used in simulator
-    def __init__(self, location, cars, max_cars, name):
+    def __init__(self, location, cars:np.array, max_cars:int, name):
         self.name = name
         self.location = location
         self.max_cars = max_cars
         self.cars = cars # [[Arrival][Plate][Model]]
 
     def arrival(self, time, car, model): # Only to be called by depart method from another object
-        if self.total_cars() == self.max_cars: # If not enough space deny trip
-            return False
-        else:
+        if self.total_cars() < self.max_cars: # If not enough space deny trip
             self.cars.append([time, car, model])
             return True
+        else:
+            return False
 
-    def depart(self, params, destination, time, car_i=0) -> float: # car_i = 0 FIFO
+    def depart(self, params, destination, time, car_i=0, model=None) -> float: # car_i = 0 FIFO
         revenue = 0
-        if destination.name != self.name and self.available_cars()>0:
+        if destination.name != self.name and len(self.available_cars(time))>0:
             distance = params.dists[self.name, destination.name] # Arrival time
             time += distance*params.dist2time
+            if model is not None:
+                car_i = np.where(self.cars[:, 2]==model)[car_i] # Filters all cars of specific model
             if destination.arrival(time, self.cars[car_i, 1], self.cars[car_i, 2]):
                 revenue = distance*params.dist2reve
-                np.delete(self.cars, car_i, axis=0)
+                np.delete(self.cars, car_i, axis=0)             
         return revenue
     
     def total_cars(self):
         return len(self.cars)
 
     def available_cars(self, time):
-        return len(np.where(self.cars[:,0]<=time))
+        return np.where(self.cars[:,0]<=time)
