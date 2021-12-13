@@ -23,9 +23,8 @@ def setup_model_dm(s, lstm, batch_size, lr, l2, num_workers, shuffle, ckpt=None)
     dm = CarDataModule(s=s, lstm=lstm, shuffle=shuffle, batch_size=batch_size, num_workers=num_workers)
     area_centers = pd.read_csv((Path('.') / 'data' / 'processed' / 'areas.csv'), index_col=0)
     cars = pd.unique(pd.read_csv(Path('.') / 'data' / 'interim' / 'rental.csv', usecols=[2]).iloc[:,0])
-    in_size = int(3+len(cars)+3*len(area_centers)) # Date, car model and location (current), amount of cars in all zones, and demand
-    out_size = len(area_centers)
     if s == 'stage_1':
+        in_size = int(3+len(cars)+3*len(area_centers)) # Date, car models and location (current), amount of cars in all zones, and demand
         if ckpt is None:
             t = len(pd.read_csv(Path('.') / 'data' / 'processed' / 'locations.csv', usecols=[0]))
             o = len(pd.read_csv(Path('.') / 'data' / 'processed' / 'actions.csv', usecols=[0]))
@@ -35,6 +34,8 @@ def setup_model_dm(s, lstm, batch_size, lr, l2, num_workers, shuffle, ckpt=None)
         else:
             model = BC_Car_s1.load_from_checkpoint(ckpt)
     elif s == 'stage_2':
+        in_size = int(3+len(cars)+3*len(area_centers)) # Date, car models and location (current), amount of cars in all zones, and demand
+        out_size = len(area_centers)
         if ckpt is None:
             model = BC_Car_s2(hidden_layers=(30*in_size, int(15*in_size+5*out_size), 10*out_size),
              in_out=(in_size, out_size), lr=lr, l2=l2)

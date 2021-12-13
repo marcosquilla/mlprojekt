@@ -33,15 +33,13 @@ class CarDataModule(pl.LightningDataModule):
         self.prepare_data(n_zones=n_zones)
 
         if s == 'stage_1':
-            self.indices = pd.read_csv((Path('.') / 'data' / 'processed' / 'locations.csv'), usecols=['Time', 'Vehicle_Number_Plate'], parse_dates=['Time'])[['Time', 'Vehicle_Number_Plate']]
+            self.indices = pd.read_csv((Path('.') / 'data' / 'processed' / 'locations.csv'), usecols=['Time', 'Virtual_Zone_Name'], parse_dates=['Time'])[['Time', 'Virtual_Zone_Name']]
             if lstm:
                 self.dataset = DayDataset_s1
             else:
                 self.dataset = CarDataset_s1
         elif s == 'stage_2':
-            l = pd.read_csv((Path('.') / 'data' / 'processed' / 'locations.csv'), usecols=['Time', 'Vehicle_Number_Plate'], parse_dates=['Time'])[['Time', 'Vehicle_Number_Plate']]
-            a = pd.read_csv((Path('.') / 'data' / 'processed' / 'actions.csv'), usecols=['Time', 'Vehicle_Number_Plate'], parse_dates=['Time'])[['Time', 'Vehicle_Number_Plate']]
-            self.indices = pd.merge(a,l,how='inner',on=['Time', 'Vehicle_Number_Plate'])
+            self.indices = pd.read_csv((Path('.') / 'data' / 'processed' / 'actions.csv'), usecols=['Time', 'Virtual_Start_Zone_Name'], parse_dates=['Time'])[['Time', 'Virtual_Start_Zone_Name']]
             self.dataset = CarDataset_s2
         
         self.train_idx, self.test_idx = train_test_split(self.indices, test_size=test_size, shuffle=shuffle)
@@ -137,15 +135,14 @@ class CarDataModule(pl.LightningDataModule):
             self.rental = pd.read_csv((Path('.') / 'data' / 'interim' / 'rental.csv'), parse_dates=['Start_Datetime_Local', 'End_Datetime_Local'], low_memory=False)
             self.rental = pd.get_dummies(self.rental, columns=['Vehicle_Model'])
             self.rental.rename(columns={'Virtual_End_Zone_Name': 'Virtual_Zone_Name'}, inplace=True) # Rename
-            self.rental['VZE_ori'] = self.rental['Virtual_Zone_Name'] # Keep original column
-            self.rental = pd.get_dummies(self.rental, columns=['Virtual_Zone_Name'])
-            cols_loc = np.append(self.rental.columns[(self.rental.columns.str.contains('Plate') | self.rental.columns.str.contains('Virtual_Zone_Name_') | self.rental.columns.str.contains('Vehicle_Model'))].values, 'Time')
-            cols_act = np.append(self.rental.columns[(self.rental.columns.str.contains('Plate') | self.rental.columns.str.contains('Virtual_Zone_Name_'))].values, 'Time')
 
-            locations = pd.concat([self.vehicle_locations(i).loc[:,cols_loc] for i, _ in enumerate(tqdm(self.timepoints))])
+            locations = pd.concat([self.vehicle_locations(i) for i, _ in enumerate(tqdm(self.timepoints))])
             locations.to_csv(Path('.') / 'data' / 'processed' / 'locations.csv', index=False)
+            # locations = pd.read_csv((Path('.') / 'data' / 'processed' / 'locations.csv'), parse_dates=['Time'])
 
-            actions = pd.concat([self.actions(i).loc[:,cols_act] for i, _ in enumerate(tqdm(self.timepoints))])
+            actions = pd.concat([self.actions(i) for i,_ in enumerate(tqdm(self.timepoints))])
+            actions = pd.merge(actions, locations, how='inner', right_on=['Time', 'Virtual_Zone_Name'], left_on=['Time', 'Virtual_Start_Zone_Name'], suffixes=(None,'_slet'))
+            actions = actions.loc[:,actions.columns[~actions.columns.str.contains('_slet')]]
             actions.to_csv(Path('.') / 'data' / 'processed' / 'actions.csv', index=False)
 
             del self.rental, actions, locations
@@ -193,6 +190,7 @@ class CarDataModule(pl.LightningDataModule):
         loc = loc.drop_duplicates(subset='Vehicle_Number_Plate', keep='last') # Keep the last location
         current_trips = self.rental[(self.rental['Start_Datetime_Local'] < self.timepoints[idx]) & (self.rental['End_Datetime_Local'] >= self.timepoints[idx])] # Cars in use
         loc = loc[~loc['Vehicle_Number_Plate'].isin(current_trips['Vehicle_Number_Plate'])] # Filter out cars in use
+        loc = loc.groupby('Virtual_Zone_Name')[loc.columns[loc.columns.str.contains('Vehicle_Model')].values].sum().reset_index()
         loc['Time'] = self.timepoints[idx]
         return loc
 
@@ -200,6 +198,7 @@ class CarDataModule(pl.LightningDataModule):
         a = self.rental[(self.rental['Servicedrive_YN']==1) &
                         (self.rental['Start_Datetime_Local'] > self.timepoints[idx]) &
                         (self.rental['Start_Datetime_Local'] <= self.timepoints[idx]+self.time_window)]
-        a = a[a['Virtual_Start_Zone_Name'] != a['VZE_ori']].iloc[:1]
+        a = a[a['Virtual_Start_Zone_Name'] != a['Virtual_Zone_Name']].iloc[:1]
+        a = a.groupby('Virtual_Start_Zone_Name')[['Virtual_Zone_Name', *a.columns[a.columns.str.contains('Vehicle_Model')].values.tolist()]].sum().reset_index()
         a['Time'] = self.timepoints[idx]
         return a

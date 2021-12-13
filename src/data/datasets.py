@@ -1,5 +1,4 @@
 from pathlib import Path
-from datetime import timedelta
 import numpy as np
 import pandas as pd
 import torch
@@ -23,12 +22,14 @@ class CarDataset_s1(Dataset):
         self.demand = self.demand.to_dict('index') # Convert for faster indexing
 
         self.actions = pd.read_csv((Path('.') / 'data' / 'processed' / 'actions.csv'), parse_dates=['Time'])    
-        self.actions = pd.MultiIndex.from_frame(self.actions.loc[:,['Time', 'Vehicle_Number_Plate']]) # MultiIndex faster
+        self.actions = pd.MultiIndex.from_frame(self.actions.loc[:,['Time', 'Virtual_Zone_Name']]) # MultiIndex faster
 
-        self.locations = pd.read_csv((Path('.') / 'data' / 'processed' / 'locations.csv'), parse_dates=['Time']).drop(labels='Vehicle_Number_Plate', axis=1)
+        self.locations = pd.read_csv((Path('.') / 'data' / 'processed' / 'locations.csv'), parse_dates=['Time'])
         self.locations[self.locations.columns[self.locations.dtypes=='int64']] = self.locations[self.locations.columns[self.locations.dtypes=='int64']].astype(np.uint8) # Cast types for lower RAM usage
-        self.vehicle_counts = self.locations.groupby('Time')[self.locations.columns[self.locations.columns.str.contains('Zone')]].sum()
-        self.vehicle_counts = self.vehicle_counts.to_dict('index') # Convert for faster indexing
+        self.vehicle_counts = self.locations.drop(labels=self.locations.columns[self.locations.columns.str.contains('Model')], axis=1)
+        self.vehicle_counts['C'] = self.locations.loc[:,self.locations.columns.str.contains('Model')].sum(axis=1)
+        self.vehicle_counts = self.vehicle_counts.pivot(index='Time', columns='Virtual_Zone_Name', values='C').fillna(0).astype(np.uint8).to_dict('index')
+        self.locations = pd.get_dummies(self.locations, columns=['Virtual_Zone_Name'])
         self.locations.drop(labels=['Time'], axis=1, inplace=True)
         self.locations = self.locations.values # Convert for faster indexing
 
@@ -72,12 +73,15 @@ class CarDataset_s2(Dataset):
         self.actions = pd.read_csv((Path('.') / 'data' / 'processed' / 'actions.csv'), parse_dates=['Time'])
         self.actions[self.actions.columns[self.actions.dtypes=='int64']] = self.actions[self.actions.columns[self.actions.dtypes=='int64']].astype(np.uint8) # Cast types for lower RAM usage
 
-        self.vehicle_counts = self.locations.groupby('Time')[self.locations.columns[self.locations.columns.str.contains('Zone')]].sum()
-        self.vehicle_counts = self.vehicle_counts.to_dict('index') # Convert for faster indexing
-        self.locations = pd.merge(self.locations, self.actions.loc[:,['Time', 'Vehicle_Number_Plate']], how='inner', on=['Time', 'Vehicle_Number_Plate']) # Remove useless records
-        self.locations.index = pd.MultiIndex.from_frame(self.locations.loc[:,['Time', 'Vehicle_Number_Plate']])
-        self.locations.drop(labels=['Time', 'Vehicle_Number_Plate'], axis=1, inplace=True)
-        self.actions.drop(labels=['Time', 'Vehicle_Number_Plate'], axis=1, inplace=True)
+        self.vehicle_counts = self.locations.drop(labels=self.locations.columns[self.locations.columns.str.contains('Model')], axis=1)
+        self.vehicle_counts['C'] = self.locations.loc[:,self.locations.columns.str.contains('Model')].sum(axis=1)
+        self.vehicle_counts = self.vehicle_counts.pivot(index='Time', columns='Virtual_Zone_Name', values='C').fillna(0).astype(np.uint8).to_dict('index')
+        self.locations = pd.merge(self.locations, self.actions, how='inner', left_on=['Time', 'Virtual_Zone_Name'], right_on=['Time', 'Virtual_Start_Zone_Name']) # Remove useless records
+        self.locations.index = pd.MultiIndex.from_frame(self.locations.loc[:,['Time', 'Virtual_Zone_Name_x']])
+        self.locations.drop(labels=['Time', 'Virtual_Start_Zone_Name', *self.locations.columns[self.locations.columns.str.contains('_y')]], axis=1, inplace=True)
+        self.locations = pd.get_dummies(self.locations, columns=['Virtual_Zone_Name_x'])
+        self.actions.drop(labels=['Time', 'Virtual_Start_Zone_Name', *self.actions.columns[self.actions.columns.str.contains('Model')]], axis=1, inplace=True)
+        self.actions = pd.get_dummies(self.actions, columns=['Virtual_Zone_Name'])
         self.actions = self.actions.values
 
     def state(self, idx):

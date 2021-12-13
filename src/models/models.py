@@ -2,7 +2,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 import pytorch_lightning as pl
-from torchmetrics import F1
+from torchmetrics import F1, Precision
 
 class BC_Car_s1(pl.LightningModule): # Step 1: Decide to move or not
     def __init__(self, in_size, hidden_layers=(100, 50), lr=1e-5, l2=1e-5, pos_weight=1000):
@@ -12,9 +12,10 @@ class BC_Car_s1(pl.LightningModule): # Step 1: Decide to move or not
         self.lr = lr
         self.l2 = l2
         self.f1_train = F1(num_classes=1)
+        self.pre_train = Precision(num_classes=1)
+        self.criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor(pos_weight))
         self.f1_test = F1(num_classes=1)
-        self.pos_weight = pos_weight
-         
+        
         self.layers_hidden = []
         for neurons in hidden_layers:
             self.layers_hidden.append(nn.Linear(self.in_features, neurons))
@@ -33,15 +34,18 @@ class BC_Car_s1(pl.LightningModule): # Step 1: Decide to move or not
     def training_step(self, batch, batch_idx):
         s, a = batch
         a_logits = self(s).squeeze()
-        loss = F.binary_cross_entropy_with_logits(a_logits, a.float(), pos_weight=torch.tensor(self.pos_weight))
+        loss = self.criterion(a_logits, a.float())
         self.f1_train(torch.round(torch.sigmoid(a_logits)), a)
-        self.log('Loss', loss, on_step=True, on_epoch=False, logger=True, sync_dist=True)
-        self.log('F1 score', self.f1_train, on_step=True, on_epoch=False, logger=True, sync_dist=True)
+        self.pre_train(torch.round(torch.sigmoid(a_logits)), a)
+        self.log('Loss', loss, on_step=False, on_epoch=True, logger=True, sync_dist=True)
+        self.log('F1 score', self.f1_train, on_step=False, on_epoch=True, logger=True, sync_dist=True)
+        self.log('Precision', self.pre_train, on_step=False, on_epoch=True, logger=True, sync_dist=True)
         return loss
 
     def test_step(self, batch, batch_idx):
         s, a = batch
         self.f1_test(torch.round(torch.sigmoid(self(s).squeeze())), a)
+        self.log('F1 score', self.f1_test, sync_dist=True)
         return {'F1 score': self.f1_test}
 
     def configure_optimizers(self):
@@ -55,6 +59,7 @@ class BC_Car_s2(pl.LightningModule): # Step 2: Decide where to move, given that 
         self.n_areas = in_out[1]
         self.lr = lr
         self.l2 = l2
+        self.criterion = nn.BCEWithLogitsLoss()
          
         self.layers_hidden = []
         for neurons in hidden_layers:
@@ -74,16 +79,20 @@ class BC_Car_s2(pl.LightningModule): # Step 2: Decide where to move, given that 
     def training_step(self, batch, batch_idx):
         s, a = batch
         a_logits = self(s)
-        loss = F.binary_cross_entropy_with_logits(a_logits, a.float())
-        acc = torch.argmax(a_logits, dim=1)==torch.argmax(a, dim=1) # Total accuracy
+        loss = self.criterion(a_logits, a.float())
+        dist = 1-torch.gather(F.softmax(a_logits, dim=1), 1, torch.argmax(a, dim=1).unsqueeze(1))
         self.log('Loss', loss, on_epoch=True, on_step=False, logger=True, sync_dist=True)
-        self.log('Accuracy', acc.sum()/len(acc), on_epoch=True, on_step=False, logger=True, sync_dist=True)
+        self.log('Distance to target', torch.sum(dist), on_epoch=True, on_step=False, logger=True, sync_dist=True)
         return loss
 
     def test_step(self, batch, batch_idx):
         s, a = batch
-        acc = torch.argmax(self(s), dim=1)==torch.argmax(a, dim=1) # Total accuracy
-        return {'Accuracy': acc.sum()/len(acc)}
+        a_logits = self(s)
+        acc = torch.argmax(a_logits, dim=1)==torch.argmax(a, dim=1) # Total accuracy
+        dist = 1-torch.gather(F.softmax(a_logits, dim=1), 1, torch.argmax(a, dim=1).unsqueeze(1))
+        self.log('Accuracy', acc.sum()/len(acc), sync_dist=True)
+        self.log('Distance', torch.sum(dist), sync_dist=True)
+        return {'Accuracy': acc.sum()/len(acc), 'Distance': torch.sum(dist)}
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=self.l2)
@@ -97,7 +106,7 @@ class BCLSTM_Car_s1(pl.LightningModule): # Step 1: Decide to move or not
         self.l2 = l2
         self.f1_train = F1(num_classes=1)
         self.f1_test = F1(num_classes=1)
-        self.pos_weight = pos_weight
+        self.criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor(pos_weight))
         
         self.lstm = nn.LSTM(
             input_size=self.in_features, hidden_size=hidden_size, 
@@ -113,7 +122,7 @@ class BCLSTM_Car_s1(pl.LightningModule): # Step 1: Decide to move or not
     def training_step(self, batch, batch_idx):
         s, a = batch
         a_logits = self(s).squeeze()
-        loss = F.binary_cross_entropy_with_logits(a_logits, a.float(), pos_weight=torch.tensor(self.pos_weight))
+        loss = self.criterion(a_logits, a.float())
         self.f1_train(torch.round(torch.sigmoid(a_logits)), a)
         self.log('Loss', loss, on_step=True, on_epoch=False, logger=True, sync_dist=True)
         self.log('F1 score', self.f1_train, on_step=True, on_epoch=False, logger=True, sync_dist=True)
@@ -132,6 +141,7 @@ class BalanceModel(pl.LightningModule):
      lr_policy=1e-3, lr_Q=1e-3, gamma=0.999, tau=0.01):
         super().__init__()
         
+        self.criterion = nn.MSELoss()
         self.lr_policy = lr_policy
         self.lr_Q = lr_Q
         self.gamma = gamma
@@ -162,7 +172,7 @@ class BalanceModel(pl.LightningModule):
 
         # Compute mean-squared Bellman error for the Q network(MSBE)
         optimizer_Q.zero_grad()
-        Qloss = F.mse_loss(self.Q_policy(s, a), y)
+        Qloss = self.criterion(self.Q_policy(s, a), y)
         self.manual_backward(Qloss, optimizer_Q)
         optimizer_Q.step()
         # The loss for the policy is just the negative value of the Q function. By doing this we look for the actions that maximise the return
