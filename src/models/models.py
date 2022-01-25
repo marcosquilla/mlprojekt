@@ -2,7 +2,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 import pytorch_lightning as pl
-from torchmetrics import F1, Precision
+from torchmetrics import F1
 
 class BC_Car_s1(pl.LightningModule): # Step 1: Decide to move or not
     def __init__(self, in_size, hidden_layers=(100, 50), lr=1e-5, l2=1e-5, pos_weight=1000):
@@ -12,7 +12,6 @@ class BC_Car_s1(pl.LightningModule): # Step 1: Decide to move or not
         self.lr = lr
         self.l2 = l2
         self.f1_train = F1(num_classes=1)
-        self.pre_train = Precision(num_classes=1)
         self.criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor(pos_weight))
         self.f1_test = F1(num_classes=1)
         
@@ -35,16 +34,14 @@ class BC_Car_s1(pl.LightningModule): # Step 1: Decide to move or not
         s, a = batch
         a_logits = self(s).squeeze()
         loss = self.criterion(a_logits, a.float())
-        self.f1_train(torch.round(torch.sigmoid(a_logits)), a)
-        self.pre_train(torch.round(torch.sigmoid(a_logits)), a)
+        self.f1_train(torch.sigmoid(a_logits), a)
         self.log('Loss', loss, on_step=False, on_epoch=True, logger=True, sync_dist=True)
         self.log('F1 score', self.f1_train, on_step=False, on_epoch=True, logger=True, sync_dist=True)
-        self.log('Precision', self.pre_train, on_step=False, on_epoch=True, logger=True, sync_dist=True)
         return loss
 
     def test_step(self, batch, batch_idx):
         s, a = batch
-        self.f1_test(torch.round(torch.sigmoid(self(s).squeeze())), a)
+        self.f1_test(torch.sigmoid(self(s).squeeze()), a)
         self.log('F1 score', self.f1_test, sync_dist=True)
         return {'F1 score': self.f1_test}
 
@@ -111,26 +108,29 @@ class BCLSTM_Car_s1(pl.LightningModule): # Step 1: Decide to move or not
         self.lstm = nn.LSTM(
             input_size=self.in_features, hidden_size=hidden_size, 
             num_layers=num_layers, dropout=0.25, batch_first=True)
+        self.dropout = nn.Dropout()
         self.linear = nn.Linear(hidden_size, 1)
 
         self.save_hyperparameters()
 
     def forward(self, s):
         s, *_ = self.lstm(s.float())
-        return self.linear(s.squeeze())
+        s = self.linear(s.squeeze())
+        return s
 
     def training_step(self, batch, batch_idx):
         s, a = batch
         a_logits = self(s).squeeze()
         loss = self.criterion(a_logits, a.float())
-        self.f1_train(torch.round(torch.sigmoid(a_logits)), a)
-        self.log('Loss', loss, on_step=True, on_epoch=False, logger=True, sync_dist=True)
-        self.log('F1 score', self.f1_train, on_step=True, on_epoch=False, logger=True, sync_dist=True)
+        self.f1_train(torch.sigmoid(a_logits.reshape(-1)), a.reshape(-1))
+        self.log('Loss', loss, on_step=False, on_epoch=True, logger=True, sync_dist=True)
+        self.log('F1 score', self.f1_train, on_step=False, on_epoch=True, logger=True, sync_dist=True)
         return loss
 
     def test_step(self, batch, batch_idx):
         s, a = batch
-        self.f1_test(torch.round(torch.sigmoid(self(s).squeeze())), a)
+        self.f1_test(torch.sigmoid(self(s).reshape(-1)), a.reshape(-1))
+        self.log('F1 score', self.f1_test, sync_dist=True)
         return {'F1 score': self.f1_test}
 
     def configure_optimizers(self):

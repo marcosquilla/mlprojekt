@@ -29,14 +29,18 @@ class CarDataModule(pl.LightningDataModule):
         self.num_workers = num_workers
         self.batch_size = batch_size
         self.time_window = time_window
+        self.time_step = time_step
         self.timepoints = np.arange(time_start, time_end, time_step).astype(datetime)
         self.prepare_data(n_zones=n_zones)
 
         if s == 'stage_1':
-            self.indices = pd.read_csv((Path('.') / 'data' / 'processed' / 'locations.csv'), usecols=['Time', 'Virtual_Zone_Name'], parse_dates=['Time'])[['Time', 'Virtual_Zone_Name']]
             if lstm:
+                self.indices = pd.read_csv((Path('.') / 'data' / 'processed' / 'locations.csv'), usecols=['Time', 'Virtual_Zone_Name'], parse_dates=['Time'])[['Time', 'Virtual_Zone_Name']]
+                self.indices['Time'] = self.indices['Time'].dt.date
+                self.indices.drop_duplicates(keep='first', inplace=True)
                 self.dataset = DayDataset_s1
             else:
+                self.indices = pd.read_csv((Path('.') / 'data' / 'processed' / 'locations.csv'), usecols=['Time', 'Virtual_Zone_Name'], parse_dates=['Time'])[['Time', 'Virtual_Zone_Name']]
                 self.dataset = CarDataset_s1
         elif s == 'stage_2':
             self.indices = pd.read_csv((Path('.') / 'data' / 'processed' / 'actions.csv'), usecols=['Time', 'Virtual_Start_Zone_Name'], parse_dates=['Time'])[['Time', 'Virtual_Start_Zone_Name']]
@@ -46,9 +50,9 @@ class CarDataModule(pl.LightningDataModule):
 
     def setup(self, stage=None):
         if stage in (None, "fit"):
-            self.train_data = self.dataset(self.train_idx)
+            self.train_data = self.dataset(self.train_idx, self.time_step)
         if stage in (None, "test"):
-            self.test_data = self.dataset(self.test_idx)
+            self.test_data = self.dataset(self.test_idx, self.time_step)
         
     def train_dataloader(self):
         return DataLoader(self.train_data, batch_size=self.batch_size, num_workers=self.num_workers, drop_last=True)
@@ -62,6 +66,7 @@ class CarDataModule(pl.LightningDataModule):
         swlon=12.140848911388979
         nelat=56.06417055142977
         nelon=12.688363746232875
+        self.n_zones = n_zones
         # Takes raw files, concatenates them, selects useful columns and saved into a single file.
         if not ((Path('.') / 'data' / 'interim' / 'rental.csv').is_file() and 
                 (Path('.') / 'data' / 'processed' / 'areas.csv').is_file()):
@@ -137,6 +142,7 @@ class CarDataModule(pl.LightningDataModule):
             self.rental.rename(columns={'Virtual_End_Zone_Name': 'Virtual_Zone_Name'}, inplace=True) # Rename
 
             locations = pd.concat([self.vehicle_locations(i) for i, _ in enumerate(tqdm(self.timepoints))])
+            locations.iloc[:,:-1] = locations.iloc[:,:-1].astype(int)
             locations.to_csv(Path('.') / 'data' / 'processed' / 'locations.csv', index=False)
             # locations = pd.read_csv((Path('.') / 'data' / 'processed' / 'locations.csv'), parse_dates=['Time'])
 
@@ -145,7 +151,7 @@ class CarDataModule(pl.LightningDataModule):
             actions = actions.loc[:,actions.columns[~actions.columns.str.contains('_slet')]]
             actions.to_csv(Path('.') / 'data' / 'processed' / 'actions.csv', index=False)
 
-            del self.rental, actions, locations
+            del self.rental, locations, actions
         
         if not (Path('.') / 'data' / 'processed' / 'demand.csv').is_file():
             print('Creating demand dataset')
@@ -191,6 +197,10 @@ class CarDataModule(pl.LightningDataModule):
         current_trips = self.rental[(self.rental['Start_Datetime_Local'] < self.timepoints[idx]) & (self.rental['End_Datetime_Local'] >= self.timepoints[idx])] # Cars in use
         loc = loc[~loc['Vehicle_Number_Plate'].isin(current_trips['Vehicle_Number_Plate'])] # Filter out cars in use
         loc = loc.groupby('Virtual_Zone_Name')[loc.columns[loc.columns.str.contains('Vehicle_Model')].values].sum().reset_index()
+        for mz in np.arange(self.n_zones)[~(np.isin(np.arange(self.n_zones),loc['Virtual_Zone_Name']))]: # Add zones with 0 cars
+            loc.loc[mz-0.5] = np.zeros(len(loc.columns))
+            loc.loc[mz-0.5, 'Virtual_Zone_Name'] = mz
+            loc = loc.sort_index().reset_index(drop=True)
         loc['Time'] = self.timepoints[idx]
         return loc
 

@@ -116,5 +116,5 @@ bin/
 .DS_Store
 
 # HPC stuff
-bsub.sh
+*.sh
 *.err

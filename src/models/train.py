@@ -5,7 +5,7 @@ from argparse import ArgumentParser
 from pathlib import Path
 import pandas as pd
 import pytorch_lightning as pl
-from src.models.models import BC_Car_s1, BC_Car_s2
+from src.models.models import BC_Car_s1, BC_Car_s2, BCLSTM_Car_s1
 from src.data.datamodules import CarDataModule
 import warnings
 
@@ -24,15 +24,22 @@ def setup_model_dm(s, lstm, batch_size, lr, l2, num_workers, shuffle, ckpt=None)
     area_centers = pd.read_csv((Path('.') / 'data' / 'processed' / 'areas.csv'), index_col=0)
     cars = pd.unique(pd.read_csv(Path('.') / 'data' / 'interim' / 'rental.csv', usecols=[2]).iloc[:,0])
     if s == 'stage_1':
-        in_size = int(3+len(cars)+3*len(area_centers)) # Date, car models and location (current), amount of cars in all zones, and demand
-        if ckpt is None:
-            t = len(pd.read_csv(Path('.') / 'data' / 'processed' / 'locations.csv', usecols=[0]))
-            o = len(pd.read_csv(Path('.') / 'data' / 'processed' / 'actions.csv', usecols=[0]))
-            pos_weight = (t-o)/o
-            model = BC_Car_s1(hidden_layers=(60*in_size, 30*in_size, 15*in_size),
-             in_size=in_size, lr=lr, l2=l2, pos_weight=pos_weight)
+        in_size = int(3+len(cars)+3*len(area_centers)) # Date (and time), car models and location (current), amount of cars in all zones, and demand
+        o = len(pd.read_csv(Path('.') / 'data' / 'processed' / 'actions.csv', usecols=[0]))
+        if lstm:
+            t = pd.read_csv((Path('.') / 'data' / 'processed' / 'locations.csv'), usecols=['Time', 'Virtual_Zone_Name'], parse_dates=['Time'])[['Time', 'Virtual_Zone_Name']]
+            t['Time'] = t['Time'].dt.date
+            t.drop_duplicates(keep='first', inplace=True)
+            pos_weight = (len(t)-o)/o
+            model = BCLSTM_Car_s1(in_size=in_size-1, hidden_size=100, num_layers=3, lr=lr, l2=l2, pos_weight=pos_weight)
         else:
-            model = BC_Car_s1.load_from_checkpoint(ckpt)
+            if ckpt is None:
+                t = len(pd.read_csv(Path('.') / 'data' / 'processed' / 'locations.csv', usecols=[0]))
+                pos_weight = (t-o)/o
+                model = BC_Car_s1(hidden_layers=(60*in_size, 30*in_size, 15*in_size),
+                in_size=in_size, lr=lr, l2=l2, pos_weight=pos_weight)
+            else:
+                model = BC_Car_s1.load_from_checkpoint(ckpt)
     elif s == 'stage_2':
         in_size = int(3+len(cars)+3*len(area_centers)) # Date, car models and location (current), amount of cars in all zones, and demand
         out_size = len(area_centers)
@@ -76,7 +83,7 @@ if __name__ == "__main__":
     parser = pl.Trainer.add_argparse_args(parser)
     save_dir = Path('.') / "models"
     parser.set_defaults(default_root_dir=str(save_dir))
-    parser.add_argument('--batch_size', default=128, type=int, help='Batch size used in the datamodule. Will be ignored if --auto_scale_batch_size')
+    parser.add_argument('--batch_size', default=64, type=int, help='Batch size used in the datamodule. Will be ignored if --auto_scale_batch_size')
     parser.add_argument('--lr', default=1e-6, type=float, help='Learning rate used in training. Will be ignored if --auto_lr_find')
     parser.add_argument('--l2', default=1e-6, type=float, help='L2 regularisation used in training')
     parser.add_argument('--num_workers', default=0, type=int, help='Number of workers for DataLoader')

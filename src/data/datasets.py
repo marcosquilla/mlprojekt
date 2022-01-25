@@ -1,13 +1,12 @@
 from pathlib import Path
+from datetime import timedelta, datetime
 import numpy as np
 import pandas as pd
 import torch
 from torch.utils.data import Dataset
 
-#TODO: Add information about where specific car models are.
-
 class CarDataset_s1(Dataset): 
-    def __init__(self, indices):
+    def __init__(self, indices, time_step):
         
         self.Mindices = pd.MultiIndex.from_frame(indices)
         self.Tindices = indices.values.tolist()
@@ -55,7 +54,7 @@ class CarDataset_s1(Dataset):
         return s, a
 
 class CarDataset_s2(Dataset): 
-    def __init__(self, indices):
+    def __init__(self, indices, time_step):
 
         self.Tindices = indices.values.tolist()
         self.indices = indices.index
@@ -106,11 +105,11 @@ class CarDataset_s2(Dataset):
         return s, a
 
 class DayDataset_s1(Dataset): 
-    def __init__(self, indices):
+    def __init__(self, indices, time_step):
         
+        self.time_step = time_step
         self.Mindices = pd.MultiIndex.from_frame(indices)
         self.Tindices = indices.values.tolist()
-        self.indices = indices.index
         self.load_data()        
 
     def load_data(self):
@@ -118,35 +117,44 @@ class DayDataset_s1(Dataset):
 
         self.demand = pd.read_csv((Path('.') / 'data' / 'processed' / 'demand.csv'), index_col=0) 
         self.demand.index = pd.to_datetime(self.demand.index, format='%Y-%m-%d %H:%M')
-        self.demand = self.demand.to_dict('index') # Convert for faster indexing
+        self.demand.index = self.demand.index.date
 
-        self.actions = pd.read_csv((Path('.') / 'data' / 'processed' / 'actions.csv'), parse_dates=['Time'])    
-        self.actions = pd.MultiIndex.from_frame(self.actions.loc[:,['Time', 'Vehicle_Number_Plate']]) # MultiIndex faster
+        self.actions = pd.read_csv((Path('.') / 'data' / 'processed' / 'actions.csv'), parse_dates=['Time'])
+        self.actions = pd.MultiIndex.from_frame(self.actions.loc[:,['Time', 'Virtual_Zone_Name']]) # MultiIndex faster
 
-        self.locations = pd.read_csv((Path('.') / 'data' / 'processed' / 'locations.csv'), parse_dates=['Time']).drop(labels='Vehicle_Number_Plate', axis=1)
+        self.locations = pd.read_csv((Path('.') / 'data' / 'processed' / 'locations.csv'), parse_dates=['Time'])
         self.locations[self.locations.columns[self.locations.dtypes=='int64']] = self.locations[self.locations.columns[self.locations.dtypes=='int64']].astype(np.uint8) # Cast types for lower RAM usage
-        self.vehicle_counts = self.locations.groupby('Time')[self.locations.columns[self.locations.columns.str.contains('Zone')]].sum()
-        self.vehicle_counts = self.vehicle_counts.to_dict('index') # Convert for faster indexing
-        self.locations.drop(labels=['Time'], axis=1, inplace=True)
-        self.locations = self.locations.values # Convert for faster indexing
+        self.vehicle_counts = self.locations.drop(labels=self.locations.columns[self.locations.columns.str.contains('Model')], axis=1)
+        self.vehicle_counts['C'] = self.locations.loc[:,self.locations.columns.str.contains('Model')].sum(axis=1)
+        self.vehicle_counts = self.vehicle_counts.pivot(index='Time', columns='Virtual_Zone_Name', values='C').fillna(0).astype(np.uint8)
+        self.vehicle_counts.index = self.vehicle_counts.index.date
+        self.locations['Time'] = self.locations['Time'].dt.date
+        self.locations.index = pd.MultiIndex.from_frame(self.locations.loc[:,['Time', 'Virtual_Zone_Name']])
+        self.locations.drop('Time', axis=1, inplace=True)
+        self.locations = pd.get_dummies(self.locations, columns=['Virtual_Zone_Name']).sort_index()
 
     def state(self, idx):
         # Auxiliary method for __getitem__. Joins vehicle locations and demand
-        dem = tuple(self.demand[self.Tindices[idx][0]].values()) # Use the list for faster indexing
-        count = tuple(self.vehicle_counts[self.Tindices[idx][0]].values()) # Use the list for faster indexing
-        loc = self.locations[self.indices[idx]] # Use list for faster indexing
+        dem = self.demand.loc[self.Tindices[idx][0]].values.tolist()
+        count = self.vehicle_counts.loc[self.Tindices[idx][0]].values.tolist()
+        loc = self.locations.loc[self.Tindices[idx][0],self.Tindices[idx][1]].values.tolist()
         return torch.hstack(
-            (torch.tensor(self.Tindices[idx][0].month), 
-            torch.tensor(self.Tindices[idx][0].day), 
-            torch.tensor(self.Tindices[idx][0].hour), 
+            (torch.full((len(dem),1), self.Tindices[idx][0].month),
+            torch.full((len(dem),1), self.Tindices[idx][0].day),
             torch.tensor(dem),
-            torch.tensor(count), 
+            torch.tensor(count),
             torch.tensor(loc)))
+    
+    def action(self, idx):
+        h = np.arange(self.Mindices[idx][0], self.Mindices[idx][0]+timedelta(days=1), self.time_step).astype(datetime)
+        z = np.full_like(h, self.Mindices[idx][1])
+        hz = tuple(map(tuple, np.vstack((h,z)).T))
+        return torch.tensor([True if i in self.actions else False for i in hz]).long()
 
     def __len__(self):
-        return len(self.indices)
+        return len(self.Tindices)
 
     def __getitem__(self, idx):
         s = self.state(idx)
-        a = torch.tensor(self.Mindices[idx] in self.actions).long() # Faster to check with MultiIndex
+        a = self.action(idx)
         return s, a
