@@ -7,10 +7,10 @@ from tqdm import tqdm
 from pyproj import Geod
 wgs84_geod = Geod(ellps='WGS84') # Distance will be measured in meters on this ellipsoid - more accurate than a spherical method
 
-# DONE: Change from car centered to area centered 
-# DONE: Don't use accuracy for stage 2, but average diference from 1 for each of the true destination.
-# Calibrate parameters based on historical data. Preprocess distances
-# Run historical data through sim to test sim (optionally run network)
+# How much time left
+# Increase areas
+# Run extreme cases in sim
+# Plot n cars per area and requests
 # Speed improvement: merge all datasets into 1
 
 class Sim():
