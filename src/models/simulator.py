@@ -7,11 +7,10 @@ from tqdm import tqdm
 from pyproj import Geod
 wgs84_geod = Geod(ellps='WGS84') # Distance will be measured in meters on this ellipsoid - more accurate than a spherical method
 
-# How much time left
+# IN PROGRESS: Run extreme cases in sim
 # Increase areas
-# Run extreme cases in sim
 # Plot n cars per area and requests
-# Speed improvement: merge all datasets into 1
+# How much time left
 
 class Sim():
     def __init__(self, time_step:timedelta=timedelta(minutes=30), time_start=datetime(2020, 2, 2, 0, 0, 0), time_end=datetime(2021, 5, 3, 23, 59, 59)):
@@ -20,7 +19,8 @@ class Sim():
         self.reference_datetime = datetime(2000,1,1)
         self.timepoints_secs = ((self.timepoints-self.reference_datetime).astype('timedelta64[ms]')/1000).astype(int)
         self.dist2time = 0.846283 # Factor to get travel time from distance in s/m (Avg. trip duration/Avg. dist)
-        self.dist2reve = 1.468  # Factor to get revenue from distance
+        self.dist2reve = 7.340  # Factor to get revenue from distance
+        self.r2t = 0.1256 # Percentage of requests that turn to trips
         self.max_dist = 500 # Maximum distance from request to area (walking distance)
         self.max_cars = 1000 # Max cars per area
 
@@ -56,6 +56,7 @@ class Sim():
 
     def step(self, idx): # idx only to get statistical data
         rs = self.requests[(self.requests['Created_Datetime_Local']>=self.timepoints_secs[idx]) & (self.requests['Created_Datetime_Local']<self.timepoints_secs[idx+1])]
+        rs = rs.sample(frac=self.r2t)
         for request in rs.itertuples():
             if request[6]<=self.max_dist:
                 try:
@@ -152,6 +153,17 @@ def run_no_moves(runs=1):
             sim.step(i)
         pd.DataFrame([sim.get_revenue()]).to_csv('reports/sim_no_moves.csv', index=False, header=False, mode='a')
 
+def run_single_moves(runs=1, cars=1):
+    pd.DataFrame([]).to_csv(f'reports/sim_{cars}_moves.csv', index=False, header=False)
+    for _ in tqdm(range(runs)):
+        sim = Sim()
+        for i, t in enumerate(tqdm(sim.timepoints[:-1], leave=False)):
+            sim.step(i)
+            for _ in range(cars):
+                sim.move_car(np.random.randint(0, len(sim.areas), 1).tolist()[0], 3, (t-sim.reference_datetime).total_seconds(), None) # Moves 1 random car to area 3 (Tåstrup)
+        pd.DataFrame([sim.get_revenue()]).to_csv(f'reports/sim_{cars}_moves.csv', index=False, header=False, mode='a')
+
 if __name__ == "__main__":
-    run_hist(runs=20)
-    run_no_moves(runs=20)
+    #run_hist(runs=20)
+    #run_no_moves(runs=20)
+    run_single_moves(runs=20, cars=500)

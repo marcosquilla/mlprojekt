@@ -3,6 +3,7 @@ from copy import deepcopy
 import glob
 from argparse import ArgumentParser
 from pathlib import Path
+from datetime import timedelta
 import pandas as pd
 import pytorch_lightning as pl
 from src.models.models import BC_Car_s1, BC_Car_s2, BCLSTM_Car_s1
@@ -30,7 +31,7 @@ def setup_model_dm(s, lstm, batch_size, lr, l2, num_workers, shuffle, ckpt=None)
             t = pd.read_csv((Path('.') / 'data' / 'processed' / 'locations.csv'), usecols=['Time', 'Virtual_Zone_Name'], parse_dates=['Time'])[['Time', 'Virtual_Zone_Name']]
             t['Time'] = t['Time'].dt.date
             t.drop_duplicates(keep='first', inplace=True)
-            pos_weight = (len(t)-o)/o
+            pos_weight = (len(t)*timedelta(days=1)/dm.time_step-o)/o
             model = BCLSTM_Car_s1(in_size=in_size-1, hidden_size=100, num_layers=3, lr=lr, l2=l2, pos_weight=pos_weight)
         else:
             if ckpt is None:
