@@ -19,7 +19,7 @@ class Sim():
         self.reference_datetime = datetime(2000,1,1)
         self.timepoints_secs = ((self.timepoints-self.reference_datetime).astype('timedelta64[ms]')/1000).astype(int)
         self.dist2time = 0.846283 # Factor to get travel time from distance in s/m (Avg. trip duration/Avg. dist)
-        self.dist2reve = 7.340  # Factor to get revenue from distance
+        self.dist2reve = 1.582  # Factor to get revenue from distance
         self.r2t = 0.1256 # Percentage of requests that turn to trips
         self.max_dist = 500 # Maximum distance from request to area (walking distance)
         self.max_cars = 1000 # Max cars per area
