@@ -1,4 +1,5 @@
 from pathlib import Path
+from argparse import ArgumentParser
 from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
@@ -106,14 +107,14 @@ class Area(): # Contains area properties and states. Used in simulator
 
     def arrival(self, time, car, model): # Only to be called by depart method from another object
         if self.total_cars() < self.max_cars: # If not enough space deny trip
-            np.vstack((self.cars, (time, car, model)))
+            self.cars = np.vstack((self.cars, np.asarray((time, car, model), dtype=object)))
             return True
         else:
             return False
 
     def depart(self, params, destination, time, car_i=0, model=None) -> float: # car_i = 0 FIFO
         revenue = 0
-        if destination.name != self.name and len(self.available_cars(time))>0:
+        if destination.name != self.name and self.available_cars(time)[0].shape[0]>0:
             distance = params.dists[self.name, destination.name] # Arrival time
             time += distance*params.dist2time
             if model is not None:
@@ -123,7 +124,7 @@ class Area(): # Contains area properties and states. Used in simulator
                     pass
             if destination.arrival(time, self.cars[car_i, 1], self.cars[car_i, 2]):
                 revenue = distance*params.dist2reve
-                np.delete(self.cars, car_i, axis=0)             
+                self.cars = np.delete(self.cars, car_i, axis=0)
         return revenue
     
     def total_cars(self):
@@ -164,6 +165,16 @@ def run_single_moves(runs=1, cars=1):
         pd.DataFrame([sim.get_revenue()]).to_csv(f'reports/sim_{cars}_moves.csv', index=False, header=False, mode='a')
 
 if __name__ == "__main__":
-    #run_hist(runs=20)
-    #run_no_moves(runs=20)
-    run_single_moves(runs=20, cars=500)
+    parser = ArgumentParser()
+    parser.add_argument('--hist', action='store_true')
+    parser.add_argument('--no_move', action='store_true')
+    parser.add_argument('--single', action='store_true')
+    parser.add_argument('--runs', default=20, type=int)
+    parser.add_argument('--moves', default=10, type=int)
+    args = parser.parse_args()
+    if args.hist:
+        run_hist(runs=args.runs)
+    if args.no_move:
+        run_no_moves(runs=args.runs)
+    if args.single:
+        run_single_moves(runs=args.runs, cars=args.moves)
