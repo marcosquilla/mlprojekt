@@ -35,8 +35,8 @@ class BC_Car_s1(pl.LightningModule): # Step 1: Decide to move or not
         a_logits = self(s).squeeze()
         loss = self.criterion(a_logits, a.float())
         self.f1_train(torch.sigmoid(a_logits), a)
-        self.log('Loss', loss, on_step=False, on_epoch=True, logger=True, sync_dist=True)
-        self.log('F1 score', self.f1_train, on_step=False, on_epoch=True, logger=True, sync_dist=True)
+        self.log('Loss', loss, logger=True, sync_dist=True)
+        self.log('F1 score', self.f1_train, logger=True, sync_dist=True)
         return loss
 
     def test_step(self, batch, batch_idx):
@@ -123,8 +123,8 @@ class BCLSTM_Car_s1(pl.LightningModule): # Step 1: Decide to move or not
         a_logits = self(s).squeeze()
         loss = self.criterion(a_logits, a.float())
         self.f1_train(torch.sigmoid(a_logits.reshape(-1)), a.reshape(-1))
-        self.log('Loss', loss, on_step=False, on_epoch=True, logger=True, sync_dist=True)
-        self.log('F1 score', self.f1_train, on_step=False, on_epoch=True, logger=True, sync_dist=True)
+        self.log('Loss', loss, logger=True, sync_dist=True)
+        self.log('F1 score', self.f1_train, logger=True, sync_dist=True)
         return loss
 
     def test_step(self, batch, batch_idx):
