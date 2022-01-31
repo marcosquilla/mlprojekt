@@ -31,7 +31,8 @@ class CarDataModule(pl.LightningDataModule):
         self.time_window = time_window
         self.time_step = time_step
         self.timepoints = np.arange(time_start, time_end, time_step).astype(datetime)
-        self.prepare_data(n_zones=n_zones)
+        self.n_zones = n_zones
+        self.prepare_data()
 
         if s == 'stage_1':
             if lstm:
@@ -60,13 +61,12 @@ class CarDataModule(pl.LightningDataModule):
     def test_dataloader(self):
         return DataLoader(self.test_data, batch_size=self.batch_size, num_workers=self.num_workers, drop_last=True)
 
-    def prepare_data(self, rental_folder:str='SN rentals', open_folder:str='SN App requests', optimise=False, opt_zones=False, n_zones=50):
+    def prepare_data(self, rental_folder:str='SN rentals', open_folder:str='SN App requests', optimise=False, opt_zones=False):
         # Limits of modelling
         swlat=55.4355410101663
         swlon=12.140848911388979
         nelat=56.06417055142977
         nelon=12.688363746232875
-        self.n_zones = n_zones
         # Takes raw files, concatenates them, selects useful columns and saved into a single file.
         if not ((Path('.') / 'data' / 'interim' / 'rental.csv').is_file() and 
                 (Path('.') / 'data' / 'processed' / 'areas.csv').is_file()):
@@ -111,7 +111,7 @@ class CarDataModule(pl.LightningDataModule):
                     scores = pd.read_csv(Path('.') / 'reports' / 'virtual_area_opt.csv', index_col='0')
                     n_zones = int(scores.iloc[np.argmax(scores)].name)
                 else:
-                    n_zones = n_zones
+                    n_zones = self.n_zones
 
             # Determine the correct zones using the whole dataset
             km = KMeans(n_clusters=n_zones, verbose=1).fit(rental.loc[:,['Start_GPS_Latitude','Start_GPS_Longitude']])
