@@ -118,3 +118,7 @@ bin/
 # HPC stuff
 *.sh
 *.err
+
+# CSV and optimisation files
+*.csv
+/reports/profiles/
