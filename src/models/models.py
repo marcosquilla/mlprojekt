@@ -4,8 +4,8 @@ import torch.nn.functional as F
 import pytorch_lightning as pl
 from torchmetrics import F1
 
-class BC_Car_s1(pl.LightningModule): # Step 1: Decide to move or not
-    def __init__(self, in_size, hidden_layers=(100, 50), lr=1e-5, l2=1e-5, pos_weight=1000):
+class BC_Area_s1(pl.LightningModule): # Step 1: Decide to move or not
+    def __init__(self, in_size, hidden_layers=(100, 50), lr=1e-5, l2=1e-5, pos_weight=25):
         super().__init__()
 
         self.in_features = in_size
@@ -13,6 +13,7 @@ class BC_Car_s1(pl.LightningModule): # Step 1: Decide to move or not
         self.l2 = l2
         self.f1_train = F1(num_classes=1)
         self.criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor(pos_weight))
+        self.f1_val = F1(num_classes=1)
         self.f1_test = F1(num_classes=1)
         
         self.layers_hidden = []
@@ -39,6 +40,12 @@ class BC_Car_s1(pl.LightningModule): # Step 1: Decide to move or not
         self.log('F1 score', self.f1_train, logger=True, sync_dist=True)
         return loss
 
+    def validation_step(self, batch, batch_idx):
+        s, a = batch
+        a_logits = self(s).squeeze()
+        self.f1_val(torch.sigmoid(a_logits), a)
+        self.log('measure', self.f1_val, logger=True, sync_dist=True)
+
     def test_step(self, batch, batch_idx):
         s, a = batch
         self.f1_test(torch.sigmoid(self(s).squeeze()), a)
@@ -48,7 +55,7 @@ class BC_Car_s1(pl.LightningModule): # Step 1: Decide to move or not
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=self.l2)
 
-class BC_Car_s2(pl.LightningModule): # Step 2: Decide where to move, given that it was decided to move
+class BC_Area_s2(pl.LightningModule): # Step 2: Decide where to move, given that it was decided to move
     def __init__(self, in_out, hidden_layers=(100, 50), lr=1e-5, l2=1e-5):
         super().__init__()
 
@@ -79,8 +86,14 @@ class BC_Car_s2(pl.LightningModule): # Step 2: Decide where to move, given that 
         loss = self.criterion(a_logits, a.float())
         dist = 1-torch.gather(F.softmax(a_logits, dim=1), 1, torch.argmax(a, dim=1).unsqueeze(1))
         self.log('Loss', loss, on_epoch=True, on_step=False, logger=True, sync_dist=True)
-        self.log('Distance to target', torch.sum(dist), on_epoch=True, on_step=False, logger=True, sync_dist=True)
+        self.log('Distance', torch.sum(dist), on_epoch=True, on_step=False, logger=True, sync_dist=True)
         return loss
+
+    def validation_step(self, batch, batch_idx):
+        s, a = batch
+        a_logits = self(s)
+        dist = 1-torch.gather(F.softmax(a_logits, dim=1), 1, torch.argmax(a, dim=1).unsqueeze(1))
+        self.log('measure', -torch.sum(dist), logger=True, sync_dist=True)
 
     def test_step(self, batch, batch_idx):
         s, a = batch
@@ -94,7 +107,7 @@ class BC_Car_s2(pl.LightningModule): # Step 2: Decide where to move, given that 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=self.l2)
 
-class BCLSTM_Car_s1(pl.LightningModule): # Step 1: Decide to move or not
+class BCLSTM_Area_s1(pl.LightningModule): # Step 1: Decide to move or not
     def __init__(self, in_size, hidden_size=100, num_layers=3, lr=1e-5, l2=1e-5, pos_weight=1000):
         super().__init__()
 
@@ -102,6 +115,7 @@ class BCLSTM_Car_s1(pl.LightningModule): # Step 1: Decide to move or not
         self.lr = lr
         self.l2 = l2
         self.f1_train = F1(num_classes=1)
+        self.f1_val = F1(num_classes=1)
         self.f1_test = F1(num_classes=1)
         self.criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor(pos_weight))
         
@@ -126,6 +140,12 @@ class BCLSTM_Car_s1(pl.LightningModule): # Step 1: Decide to move or not
         self.log('Loss', loss, logger=True, sync_dist=True)
         self.log('F1 score', self.f1_train, logger=True, sync_dist=True)
         return loss
+
+    def validation_step(self, batch, batch_idx):
+        s, a = batch
+        a_logits = self(s).squeeze()
+        self.f1_val(torch.sigmoid(a_logits.reshape(-1)), a.reshape(-1))
+        self.log('measure', self.f1_val, logger=True, sync_dist=True)
 
     def test_step(self, batch, batch_idx):
         s, a = batch
