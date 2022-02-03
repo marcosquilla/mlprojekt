@@ -10,12 +10,12 @@ from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 from pyproj import Geod
 from tqdm import tqdm
-from src.data.datasets import CarDataset_s1, CarDataset_s2, DayDataset_s1
+from src.data.datasets import AreaDataset_s1, AreaDataset_s2, DayDataset_s1
 
-class CarDataModule(pl.LightningDataModule):
+class AreaDataModule(pl.LightningDataModule):
     def __init__(self, s, lstm, batch_size:int=16, time_step:timedelta=timedelta(minutes=30), time_window:timedelta=timedelta(minutes=30),
     time_start=datetime(2020, 2, 2, 0, 0, 0), time_end=datetime(2021, 5, 3, 23, 59, 59), 
-    test_size=0.2, shuffle=False, num_workers=0, n_zones=20):
+    test_size=0.2, val_size=0.1, shuffle=False, num_workers=0, n_zones=20):
         super().__init__()
 
         assert s == 'stage_1' or s == 'stage_2', 'Unknown stage'
@@ -42,21 +42,27 @@ class CarDataModule(pl.LightningDataModule):
                 self.dataset = DayDataset_s1
             else:
                 self.indices = pd.read_csv((Path('.') / 'data' / 'processed' / 'locations.csv'), usecols=['Time', 'Virtual_Zone_Name'], parse_dates=['Time'])[['Time', 'Virtual_Zone_Name']]
-                self.dataset = CarDataset_s1
+                self.dataset = AreaDataset_s1
         elif s == 'stage_2':
             self.indices = pd.read_csv((Path('.') / 'data' / 'processed' / 'actions.csv'), usecols=['Time', 'Virtual_Start_Zone_Name'], parse_dates=['Time'])[['Time', 'Virtual_Start_Zone_Name']]
-            self.dataset = CarDataset_s2
+            self.dataset = AreaDataset_s2
         
-        self.train_idx, self.test_idx = train_test_split(self.indices, test_size=test_size, shuffle=shuffle)
+        self.tv_idx, self.test_idx = train_test_split(self.indices, test_size=test_size, shuffle=shuffle)
+        self.train_idx, self.val_idx = train_test_split(self.tv_idx, test_size=val_size/(1-test_size), shuffle=shuffle)
+
 
     def setup(self, stage=None):
         if stage in (None, "fit"):
             self.train_data = self.dataset(self.train_idx, self.time_step)
+            self.val_data = self.dataset(self.val_idx, self.time_step)
         if stage in (None, "test"):
             self.test_data = self.dataset(self.test_idx, self.time_step)
         
     def train_dataloader(self):
         return DataLoader(self.train_data, batch_size=self.batch_size, num_workers=self.num_workers, drop_last=True)
+
+    def val_dataloader(self):
+        return DataLoader(self.val_data, batch_size=self.batch_size, num_workers=self.num_workers, drop_last=True)
     
     def test_dataloader(self):
         return DataLoader(self.test_data, batch_size=self.batch_size, num_workers=self.num_workers, drop_last=True)
@@ -144,7 +150,6 @@ class CarDataModule(pl.LightningDataModule):
             locations = pd.concat([self.vehicle_locations(i) for i, _ in enumerate(tqdm(self.timepoints))])
             locations.iloc[:,:-1] = locations.iloc[:,:-1].astype(int)
             locations.to_csv(Path('.') / 'data' / 'processed' / 'locations.csv', index=False)
-            # locations = pd.read_csv((Path('.') / 'data' / 'processed' / 'locations.csv'), parse_dates=['Time'])
 
             actions = pd.concat([self.actions(i) for i,_ in enumerate(tqdm(self.timepoints))])
             actions = pd.merge(actions, locations, how='inner', right_on=['Time', 'Virtual_Zone_Name'], left_on=['Time', 'Virtual_Start_Zone_Name'], suffixes=(None,'_slet'))
