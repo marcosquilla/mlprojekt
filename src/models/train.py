@@ -1,3 +1,4 @@
+from gc import callbacks
 import os
 from copy import deepcopy
 import glob
@@ -6,8 +7,9 @@ from pathlib import Path
 from datetime import timedelta
 import pandas as pd
 import pytorch_lightning as pl
-from src.models.models import BC_Car_s1, BC_Car_s2, BCLSTM_Car_s1
-from src.data.datamodules import CarDataModule
+from pytorch_lightning.callbacks.early_stopping import EarlyStopping
+from src.models.models import BC_Area_s1, BC_Area_s2, BCLSTM_Area_s1
+from src.data.datamodules import AreaDataModule
 import warnings
 
 # TODO: Time_window vs time_delta tuning. Data download.
@@ -21,41 +23,44 @@ def get_ckpt_path(args, stage):
         return None
 
 def setup_model_dm(s, lstm, batch_size, lr, l2, num_workers, shuffle, n_zones, ckpt=None):
-    dm = CarDataModule(s=s, lstm=lstm, shuffle=shuffle, batch_size=batch_size, num_workers=num_workers, n_zones=n_zones)
+    dm = AreaDataModule(s=s, lstm=lstm, shuffle=shuffle, batch_size=batch_size, num_workers=num_workers, n_zones=n_zones)
     area_centers = pd.read_csv((Path('.') / 'data' / 'processed' / 'areas.csv'), index_col=0)
     cars = pd.unique(pd.read_csv(Path('.') / 'data' / 'interim' / 'rental.csv', usecols=[2]).iloc[:,0])
     if s == 'stage_1':
         in_size = int(3+len(cars)+3*len(area_centers)) # Date (and time), car models and location (current), amount of cars in all zones, and demand
         o = len(pd.read_csv(Path('.') / 'data' / 'processed' / 'actions.csv', usecols=[0]))
         if lstm:
-            t = pd.read_csv((Path('.') / 'data' / 'processed' / 'locations.csv'), usecols=['Time', 'Virtual_Zone_Name'], parse_dates=['Time'])[['Time', 'Virtual_Zone_Name']]
-            t['Time'] = t['Time'].dt.date
-            t.drop_duplicates(keep='first', inplace=True)
-            pos_weight = (len(t)*timedelta(days=1)/dm.time_step-o)/o
-            model = BCLSTM_Car_s1(in_size=in_size-1, hidden_size=100, num_layers=3, lr=lr, l2=l2, pos_weight=pos_weight)
+            if ckpt is None:
+                t = pd.read_csv((Path('.') / 'data' / 'processed' / 'locations.csv'), usecols=['Time', 'Virtual_Zone_Name'], parse_dates=['Time'])[['Time', 'Virtual_Zone_Name']]
+                t['Time'] = t['Time'].dt.date
+                t.drop_duplicates(keep='first', inplace=True)
+                pos_weight = (len(t)*timedelta(days=1)/dm.time_step-o)/o
+                model = BCLSTM_Area_s1(in_size=in_size-1, hidden_size=100, num_layers=3, lr=lr, l2=l2, pos_weight=pos_weight)
+            else:
+                model = BCLSTM_Area_s1.load_from_checkpoint(ckpt)
         else:
             if ckpt is None:
                 t = len(pd.read_csv(Path('.') / 'data' / 'processed' / 'locations.csv', usecols=[0]))
                 pos_weight = (t-o)/o
-                model = BC_Car_s1(hidden_layers=(60*in_size, 30*in_size, 15*in_size),
+                model = BC_Area_s1(hidden_layers=(60*in_size, 30*in_size, 15*in_size),
                 in_size=in_size, lr=lr, l2=l2, pos_weight=pos_weight)
             else:
-                model = BC_Car_s1.load_from_checkpoint(ckpt)
+                model = BC_Area_s1.load_from_checkpoint(ckpt)
     elif s == 'stage_2':
         in_size = int(3+len(cars)+3*len(area_centers)) # Date, car models and location (current), amount of cars in all zones, and demand
         out_size = len(area_centers)
         if ckpt is None:
-            model = BC_Car_s2(hidden_layers=(30*in_size, int(15*in_size+5*out_size), 10*out_size),
+            model = BC_Area_s2(hidden_layers=(30*in_size, int(15*in_size+5*out_size), 10*out_size),
              in_out=(in_size, out_size), lr=lr, l2=l2)
         else:
-            model = BC_Car_s2.load_from_checkpoint(ckpt)
+            model = BC_Area_s2.load_from_checkpoint(ckpt)
     return model, dm
 
 def run_stage(args, stage):
     ckpt = get_ckpt_path(args, stage)
     args_trainer = deepcopy(args)
     args_trainer.default_root_dir = args.default_root_dir + '/' + stage
-    trainer = pl.Trainer.from_argparse_args(args_trainer)
+    trainer = pl.Trainer.from_argparse_args(args_trainer, callbacks=[EarlyStopping(monitor='measure', mode='max', patience=10)])
     model, dm = setup_model_dm(s=stage, lstm=args.lstm, batch_size=args.batch_size, lr=args.lr, l2=args.l2, 
         num_workers=args.num_workers, shuffle=args.shuffle, n_zones=args.n_zones, ckpt=ckpt)
     if args.fit:
