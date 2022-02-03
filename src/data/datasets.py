@@ -5,7 +5,7 @@ import pandas as pd
 import torch
 from torch.utils.data import Dataset
 
-class CarDataset_s1(Dataset): 
+class AreaDataset_s1(Dataset): 
     def __init__(self, indices, time_step):
         
         self.Mindices = pd.MultiIndex.from_frame(indices)
@@ -53,7 +53,7 @@ class CarDataset_s1(Dataset):
         a = torch.tensor(self.Mindices[idx] in self.actions).long() # Faster to check with MultiIndex
         return s, a
 
-class CarDataset_s2(Dataset): 
+class AreaDataset_s2(Dataset): 
     def __init__(self, indices, time_step):
 
         self.Tindices = indices.values.tolist()
