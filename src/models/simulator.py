@@ -8,11 +8,6 @@ from tqdm import tqdm
 from pyproj import Geod
 wgs84_geod = Geod(ellps='WGS84') # Distance will be measured in meters on this ellipsoid - more accurate than a spherical method
 
-# IN PROGRESS: Run extreme cases in sim
-# Increase areas
-# Plot n cars per area and requests
-# How much time left
-
 class Sim():
     def __init__(self, time_step:timedelta=timedelta(minutes=30), time_start=datetime(2020, 2, 2, 0, 0, 0), time_end=datetime(2021, 5, 3, 23, 59, 59)):
 
@@ -20,8 +15,8 @@ class Sim():
         self.reference_datetime = datetime(2000,1,1)
         self.timepoints_secs = ((self.timepoints-self.reference_datetime).astype('timedelta64[ms]')/1000).astype(int)
         self.dist2time = 0.846283 # Factor to get travel time from distance in s/m (Avg. trip duration/Avg. dist)
-        self.dist2reve = 1.582  # Factor to get revenue from distance
-        self.r2t = 0.1256 # Percentage of requests that turn to trips
+        self.dist2reve = 1.851  # Factor to get revenue from distance
+        self.r2t = 0.1256 # Fraction of requests that turn to trips
         self.max_dist = 500 # Maximum distance from request to area (walking distance)
         self.max_cars = 1000 # Max cars per area
 
@@ -56,8 +51,8 @@ class Sim():
                     i) for i, coords in self.area_centers.iterrows()]
 
     def step(self, idx): # idx only to get statistical data
-        rs = self.requests[(self.requests['Created_Datetime_Local']>=self.timepoints_secs[idx]) & (self.requests['Created_Datetime_Local']<self.timepoints_secs[idx+1])]
-        rs = rs.sample(frac=self.r2t)
+        self.demand = self.requests[(self.requests['Created_Datetime_Local']>=self.timepoints_secs[idx]) & (self.requests['Created_Datetime_Local']<self.timepoints_secs[idx+1])]
+        rs = self.demand.sample(frac=self.r2t)
         for request in rs.itertuples():
             if request[6]<=self.max_dist:
                 try:
@@ -66,7 +61,7 @@ class Sim():
                         self.timepoints[idx].weekday(), 
                         self.timepoints[idx].hour, 
                         request[5])).sample(1).values.tolist()[0]  # Sample a destination from historical data based on origin and datetime
-                except KeyError: # No previous trip from origin area at this time
+                except KeyError: # No previous trip from origin area at this date and time. Pick random one.
                     d = np.random.randint(0, len(self.areas), 1).tolist()[0]
                 r = self.areas[request[5]].depart(
                     self,
@@ -80,13 +75,12 @@ class Sim():
 
     def get_state(self, idx): # idx only to see available cars
         time = self.timepoints_secs[idx]
-        locs = np.array([
-            [[a.name]*len(a.available_cars(time)), 
-            a.cars[a.available_cars(time),1].tolist(),
-            a.cars[a.available_cars(time),2].tolist()] for a in self.areas]) # [[Location][Plate][Model]]
+        locs = np.hstack(
+            [np.array([([a.name]*len(a.available_cars(time))),
+             (a.cars[a.available_cars(time),2].tolist())]) for a in self.areas]).T # [[Location][Plate][Model]]
         return locs
 
-    def move_car(self, origin, dest, time, model):
+    def move_car(self, origin, dest, time, model=None):
         self.areas[origin].depart(self, self.areas[dest], time=time, model=model)
 
     def dr2a(self, row): # Distance from request to area
@@ -114,7 +108,7 @@ class Area(): # Contains area properties and states. Used in simulator
 
     def depart(self, params, destination, time, car_i=0, model=None) -> float: # car_i = 0 FIFO
         revenue = 0
-        if destination.name != self.name and self.available_cars(time)[0].shape[0]>0:
+        if destination.name != self.name and self.available_cars(time).shape[0]>0:
             distance = params.dists[self.name, destination.name] # Arrival time
             time += distance*params.dist2time
             if model is not None:
@@ -131,50 +125,4 @@ class Area(): # Contains area properties and states. Used in simulator
         return len(self.cars)
 
     def available_cars(self, time):
-        return np.where(self.cars[:,0]<=time)
-
-def run_hist(runs=1):
-    actions = pd.read_csv((Path('.') / 'data' / 'processed' / 'actions.csv'), parse_dates=['Time'])
-    for _ in tqdm(range(runs)):
-        sim = Sim()
-        for i, t in enumerate(tqdm(sim.timepoints[:-1], leave=False)):
-            sim.step(i)
-            for _, action in actions[actions['Time']==t].iterrows(): # Perform historical moves
-                sim.move_car(
-                    action['Virtual_Start_Zone_Name'],
-                    action['Virtual_Zone_Name'],
-                    (t-sim.reference_datetime).total_seconds(),
-                    action[action==1].index[action[action==1].index.str.contains('Vehicle')][0][14:])
-        pd.DataFrame([sim.get_revenue()]).to_csv('reports/sim_hist_rev.csv', index=False, header=False, mode='a')
-
-def run_no_moves(runs=1):
-    for _ in tqdm(range(runs)):
-        sim = Sim()
-        for i, t in enumerate(tqdm(sim.timepoints[:-1], leave=False)):
-            sim.step(i)
-        pd.DataFrame([sim.get_revenue()]).to_csv('reports/sim_no_moves.csv', index=False, header=False, mode='a')
-
-def run_single_moves(runs=1, cars=1):
-    pd.DataFrame([]).to_csv(f'reports/sim_{cars}_moves.csv', index=False, header=False)
-    for _ in tqdm(range(runs)):
-        sim = Sim()
-        for i, t in enumerate(tqdm(sim.timepoints[:-1], leave=False)):
-            sim.step(i)
-            for _ in range(cars):
-                sim.move_car(np.random.randint(0, len(sim.areas), 1).tolist()[0], 3, (t-sim.reference_datetime).total_seconds(), None) # Moves 1 random car to area 3 (Tåstrup)
-        pd.DataFrame([sim.get_revenue()]).to_csv(f'reports/sim_{cars}_moves.csv', index=False, header=False, mode='a')
-
-if __name__ == "__main__":
-    parser = ArgumentParser()
-    parser.add_argument('--hist', action='store_true')
-    parser.add_argument('--no_move', action='store_true')
-    parser.add_argument('--single', action='store_true')
-    parser.add_argument('--runs', default=20, type=int)
-    parser.add_argument('--moves', default=10, type=int)
-    args = parser.parse_args()
-    if args.hist:
-        run_hist(runs=args.runs)
-    if args.no_move:
-        run_no_moves(runs=args.runs)
-    if args.single:
-        run_single_moves(runs=args.runs, cars=args.moves)
+        return np.where(self.cars[:,0]<=time)[0]
