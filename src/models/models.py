@@ -156,8 +156,117 @@ class BCLSTM_Area_s1(pl.LightningModule): # Step 1: Decide to move or not
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=self.l2)
 
-class BalanceModel(pl.LightningModule):
-    def __init__(self, hidden_layers_policy=[50, 20], hidden_layers_Q=[50, 20],
+class Q(nn.Module):
+    def __init__(self, in_out, hidden_layers=(100, 50)):
+        super().__init__()
+        self.in_features = in_out[0]
+        
+        self.layers_hidden = []
+        for neurons in hidden_layers:
+            self.layers_hidden.append(nn.Linear(self.in_features, neurons))
+            self.layers_hidden.append(nn.ReLU())
+            self.in_features = neurons
+
+        self.layers_hidden.append(nn.Linear(hidden_layers[-1], in_out[1]))
+        self.layers_hidden = nn.Sequential(*self.layers_hidden)
+    
+    def forward(self, x):
+        return self.layers_hidden(x.float())
+
+class DQN(pl.LightningModule):
+    def __init__(
+        self, in_out, buffer, agent, hidden_layers=[50, 20], lr=1e-3, l2=1e-8, gamma=0.999,
+        sync_rate=10, eps_stop=1000, eps_start=1.0, eps_end=0.01, double_dqn=False):
+        super().__init__()
+        self.save_hyperparameters(ignore=[buffer, agent])
+
+        self.buffer = buffer
+        self.agent = agent
+
+        self.Q = Q(in_out, hidden_layers)
+        self.target = Q(in_out, hidden_layers)
+
+        self.loss = self.double_dqn_loss if double_dqn else self.dqn_loss
+
+        self.episode_reward = 0
+        self.total_reward = 0
+
+    def forward(self, s):
+        return self(s)
+
+    def dqn_loss(self, batch):
+        states, actions, rewards, dones, next_states = batch
+
+        states = states.float()
+        states.requires_grad_(True)
+        state_action_values = self.Q(states).gather(1, actions.unsqueeze(-1)).squeeze(-1)
+
+        with torch.no_grad():
+            next_state_values = self.target(next_states).max(1)[0]
+            next_state_values[dones] = 0.0
+            next_state_values = next_state_values.detach()
+
+        expected_state_action_values = next_state_values * self.hparams.gamma + rewards
+
+        return F.mse_loss(state_action_values, expected_state_action_values)
+
+    def double_dqn_loss(self, batch):
+        states, actions, rewards, dones, next_states = batch
+
+        states = states.float()
+        states.requires_grad_(True)
+        state_action_values = self.Q(states).gather(1, actions.unsqueeze(-1)).squeeze(-1)
+
+        with torch.no_grad():
+            next_outputs = self.Q(next_states)  # [16, 2], [batch, action_space]
+
+            next_state_acts = next_outputs.max(1)[1].unsqueeze(-1)  # take action at the index with the highest value
+            next_tgt_out = self.target(next_states)
+
+            # Take the value of the action chosen by the train network
+            next_state_values = next_tgt_out.gather(1, next_state_acts).squeeze(-1)
+            next_state_values[dones] = 0.0
+            next_state_values = next_state_values.detach()
+
+        expected_state_action_values = next_state_values * self.hparams.gamma + rewards
+
+        return F.mse_loss(state_action_values, expected_state_action_values)
+
+    def training_step(self, batch, batch_idx):
+        epsilon = max(
+            self.hparams.eps_end,
+            self.hparams.eps_start - self.global_step + 1 / self.hparams.eps_stop)
+
+        reward, done = self.agent.play_step(self.Q, epsilon, self.device)
+        self.episode_reward += reward
+
+        loss = self.loss(batch)
+
+        if self.trainer._distrib_type in {pl.utilities.DistributedType.DP, pl.utilities.DistributedType.DDP2}:
+            loss = loss.unsqueeze(0)
+
+        if done:
+            self.total_reward = self.episode_reward
+            self.episode_reward = 0
+            self.log("Total_reward", self.total_reward, sync_dist=True)
+
+        if self.global_step % self.hparams.sync_rate == 0:
+            self.target.load_state_dict(self.Q.state_dict())
+
+        status = {
+            "steps": torch.tensor(self.global_step).to(self.device),
+            "total_reward": torch.tensor(self.total_reward).to(self.device),
+        }
+
+        self.log("Loss", loss, sync_dist=True)
+        
+        return {"loss": loss, "progress_bar": status}
+
+    def configure_optimizers(self):
+        return torch.optim.Adam(self.Q.parameters(), lr=self.hparams.lr, weight_decay=self.hparams.l2)
+
+class DDPG(pl.LightningModule):
+    def __init__(self, Pin_out, Qin_sizes, hidden_layers_policy=[50, 20], hidden_layers_Q=[50, 20],
      lr_policy=1e-3, lr_Q=1e-3, gamma=0.999, tau=0.01):
         super().__init__()
         
@@ -167,13 +276,13 @@ class BalanceModel(pl.LightningModule):
         self.gamma = gamma
         self.tau = tau
 
-        self.policy_net = Policy(hidden_layers=hidden_layers_policy)
-        self.target_net = Policy(hidden_layers=hidden_layers_policy)
+        self.policy_net = Policy(Pin_out, hidden_layers_policy)
+        self.target_net = Policy(Pin_out, hidden_layers_policy)
         self.target_net.load_state_dict(self.policy_net.state_dict())
         self.target_net.freeze()
 
-        self.Q_policy = Q(hidden_layers=hidden_layers_Q)
-        self.Q_target = Q(hidden_layers=hidden_layers_Q)
+        self.Q_policy = QN(Qin_sizes, hidden_layers_Q)
+        self.Q_target = QN(Qin_sizes, hidden_layers_Q)
         self.Q_target.load_state_dict(self.Q_policy.state_dict())
         self.Q_target.freeze()
 
@@ -215,10 +324,10 @@ class BalanceModel(pl.LightningModule):
         return [optimizer_policy, optimizer_Q]
 
 class Policy(nn.Module):
-    def __init__(self, hidden_layers):
+    def __init__(self, in_out, hidden_layers):
         super(Policy, self).__init__()
         
-        self.hidden_in_features = 5
+        self.hidden_in_features = in_out[0]
         
         self.layers_hidden = []
         for neurons in hidden_layers:
@@ -226,7 +335,7 @@ class Policy(nn.Module):
             self.hidden_in_features = neurons
             self.layers_hidden.append(nn.ReLU())
 
-        self.layers_hidden.append(nn.Linear(hidden_layers[-1], 1))
+        self.layers_hidden.append(nn.Linear(hidden_layers[-1], in_out[1]))
         self.layers_hidden = nn.Sequential(*self.layers_hidden)
     
     def forward(self, x):
@@ -238,12 +347,12 @@ class Policy(nn.Module):
             params[k] = (1-tau) * params[k] + tau * new_params[k]
         self.load_state_dict(params)
 
-class Q(nn.Module):
-    def __init__(self, hidden_layers):
+class QN(nn.Module):
+    def __init__(self, in_sizes, hidden_layers):
         super(Q, self).__init__()
 
-        self.Lobs = nn.Linear(5, int(hidden_layers[0]/2))
-        self.Lact = nn.Linear(1, int(hidden_layers[0]/2))
+        self.Lobs = nn.Linear(in_sizes[0], int(hidden_layers[0]/2))
+        self.Lact = nn.Linear(in_sizes[1], int(hidden_layers[0]/2))
         self.hidden_in_features = hidden_layers[0]
         
         self.layers_hidden = []

@@ -1,9 +1,10 @@
 from pathlib import Path
+from collections import deque
 from datetime import timedelta, datetime
 import numpy as np
 import pandas as pd
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, IterableDataset
 
 class AreaDataset_s1(Dataset): 
     def __init__(self, indices, time_step):
@@ -158,3 +159,35 @@ class DayDataset_s1(Dataset):
         s = self.state(idx)
         a = self.action(idx)
         return s, a
+
+class QDataset(IterableDataset):
+    def __init__(self, buffer, sample_size: int = 200):
+        self.buffer = buffer
+        self.sample_size = sample_size
+
+    def __iter__(self):
+        states, actions, rewards, dones, new_states = self.buffer.sample(self.sample_size)
+        for i in range(len(dones)):
+            yield states[i], actions[i], rewards[i], dones[i], new_states[i]
+
+class ReplayBuffer():
+    def __init__(self, capacity: int):
+        self.buffer = deque(maxlen=capacity)
+
+    def __len__(self) -> None:
+        return len(self.buffer)
+
+    def append(self, experience):
+        self.buffer.append(experience)
+
+    def sample(self, sample_size: int):
+        indices = np.random.choice(len(self.buffer), sample_size, replace=False)
+        states, actions, rewards, dones, next_states = zip(*(self.buffer[idx] for idx in indices))
+        
+        return (
+            np.array(states),
+            np.array(actions),
+            np.array(rewards, dtype=np.float32),
+            np.array(dones, dtype=np.bool),
+            np.array(next_states),
+        )
