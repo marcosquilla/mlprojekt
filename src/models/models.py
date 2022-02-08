@@ -175,13 +175,10 @@ class Q(nn.Module):
 
 class DQN(pl.LightningModule):
     def __init__(
-        self, in_out, buffer, agent, hidden_layers=[50, 20], lr=1e-3, l2=1e-8, gamma=0.999,
+        self, in_out, agent, hidden_layers=[50, 20], lr=1e-3, l2=1e-8, gamma=0.999,
         sync_rate=10, eps_stop=1000, eps_start=1.0, eps_end=0.01, double_dqn=False):
         super().__init__()
-        self.save_hyperparameters(ignore=[buffer, agent])
-
-        self.buffer = buffer
-        self.agent = agent
+        self.save_hyperparameters(ignore=[agent])
 
         self.Q = Q(in_out, hidden_layers)
         self.target = Q(in_out, hidden_layers)
@@ -237,7 +234,7 @@ class DQN(pl.LightningModule):
             self.hparams.eps_end,
             self.hparams.eps_start - self.global_step + 1 / self.hparams.eps_stop)
 
-        reward, done = self.agent.play_step(self.Q, epsilon, self.device)
+        reward, done = self.hparams.agent.play_step(self.Q, epsilon, self.device)
         self.episode_reward += reward
 
         loss = self.loss(batch)

@@ -34,15 +34,11 @@ def create_buffer_agent(args):
         print('Populating buffer')
         for _ in tqdm(range(args.warm_up)):
             agent.play_step(net=None, epsilon=1.0)
-        print("Saving buffer")
         with open(str(Path('.') / 'data' / 'processed' / 'buffer.pkl'), 'wb') as f:
                 pickle.dump(buffer, f)
-        print("Done")
     else:
-        print("Loading buffer")
         with open(str(Path('.') / 'data' / 'processed' / 'buffer.pkl'), 'rb') as f:
             buffer = pickle.load(f)
-        print("Done")
         agent = Agent(buffer)
     return buffer, agent
 
@@ -85,7 +81,7 @@ def setup_model_dm(args, s, ckpt=None):
         buffer, agent = create_buffer_agent(args)
         dm = QDataModule(buffer=buffer, sample_size=args.sample_size, batch_size=args.batch_size, num_workers=args.num_workers)
         model = DQN(
-            in_out=(in_size, out_size), buffer=buffer, agent=agent, 
+            in_out=(in_size, out_size), agent=agent, 
             hidden_layers=(30*in_size, int(15*in_size+5*out_size), 10*out_size),
             lr=args.lr, l2=args.l2, gamma=args.gamma, sync_rate=args.sync_rate,
             eps_stop=args.eps_stop, eps_start=args.eps_start, eps_end=args.eps_end, double_dqn=args.ddqn)
