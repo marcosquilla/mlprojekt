@@ -183,7 +183,7 @@ class Q(nn.Module):
 class DQN(pl.LightningModule):
     def __init__(
         self, in_out, hidden_layers=[50, 20], buffer_capacity=1000000, warm_up=21936, sample_size=21936, batch_size=32,
-        num_workers=0, lr=1e-3, l2=1e-8, gamma=0.999, sync_rate=10, eps_stop=1000, eps_start=1.0, eps_end=0.01, time_end=datetime(2020,6,1,0,0,0),
+        num_workers=0, lr=1e-3, l2=1e-8, gamma=0.999, sync_rate=10, eps_stop=1000, eps_start=1.0, eps_end=0.01, time_end=datetime(2021, 5, 3, 23, 59, 59),
         double_dqn=False):
         super().__init__()
 
