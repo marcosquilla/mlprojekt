@@ -3,16 +3,12 @@ from copy import deepcopy
 import glob
 from argparse import ArgumentParser
 from pathlib import Path
-import pickle
-from tqdm import tqdm
 from datetime import timedelta
 import pandas as pd
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks.early_stopping import EarlyStopping
 from src.models.models import BC_Area_s1, BC_Area_s2, BCLSTM_Area_s1, DQN
-from src.data.datasets import ReplayBuffer
-from src.data.datamodules import AreaDataModule, QDataModule
-from src.models.simulator import Agent
+from src.data.datamodules import AreaDataModule
 import warnings
 #warnings.filterwarnings('error')
 
@@ -26,21 +22,6 @@ def get_ckpt_path(args, stage):
         return Path('.') / max(glob.glob(str(ckpt_path)), key=os.path.getmtime)
     else:
         return None
-
-def create_buffer_agent(args):
-    if not (Path('.') / 'data' / 'processed' / 'buffer.pkl').is_file():
-        buffer = ReplayBuffer(args.buffer_capacity)
-        agent = Agent(buffer)
-        print('Populating buffer')
-        for _ in tqdm(range(args.warm_up)):
-            agent.play_step(net=None, epsilon=1.0)
-        with open(str(Path('.') / 'data' / 'processed' / 'buffer.pkl'), 'wb') as f:
-                pickle.dump(buffer, f)
-    else:
-        with open(str(Path('.') / 'data' / 'processed' / 'buffer.pkl'), 'rb') as f:
-            buffer = pickle.load(f)
-        agent = Agent(buffer)
-    return buffer, agent
 
 def setup_model_dm(args, s, ckpt=None):
     area_centers = pd.read_csv((Path('.') / 'data' / 'processed' / 'areas.csv'), index_col=0)
@@ -78,14 +59,13 @@ def setup_model_dm(args, s, ckpt=None):
     elif s == 'dqn':
         in_size = int(3+len(cars)+3*len(area_centers)) # Date, car models and location (current), amount of cars in all zones, and demand
         out_size = len(area_centers)
-        buffer, agent = create_buffer_agent(args)
-        dm = QDataModule(buffer=buffer, sample_size=args.sample_size, batch_size=args.batch_size, num_workers=args.num_workers)
         model = DQN(
-            in_out=(in_size, out_size), agent=agent, 
+            in_out=(in_size, out_size),
             hidden_layers=(30*in_size, int(15*in_size+5*out_size), 10*out_size),
-            lr=args.lr, l2=args.l2, gamma=args.gamma, sync_rate=args.sync_rate,
+            lr=args.lr, l2=args.l2, gamma=args.gamma, sync_rate=args.sync_rate, buffer_capacity=args.buffer_capacity, 
+            warm_up=args.warm_up, sample_size=args.sample_size, batch_size=args.batch_size, num_workers=args.num_workers,
             eps_stop=args.eps_stop, eps_start=args.eps_start, eps_end=args.eps_end, double_dqn=args.ddqn)
-    return model, dm
+    return model, None
 
 def run_stage(args, stage):
     ckpt = get_ckpt_path(args, stage)
@@ -98,16 +78,16 @@ def run_stage(args, stage):
     model, dm = setup_model_dm(args=args, s=stage, ckpt=ckpt)
     if args.fit:
         if args.auto_lr_find or (args.auto_scale_batch_size is not None):
-            trainer.tune(model, dm)
+            trainer.tune(model, datamodule=dm)
         if ckpt is None:
-            trainer.fit(model, dm)
+            trainer.fit(model, datamodule=dm)
         else:
-            trainer.fit(model, dm, ckpt_path=ckpt)
+            trainer.fit(model, datamodule=dm, ckpt_path=ckpt)
     if args.test and not args.dqn:
         if ckpt is None or args.fit:
-            trainer.test(model, dm)
+            trainer.test(model, datamodule=dm)
         else:
-            trainer.test(model, dm, ckpt_path=ckpt)
+            trainer.test(model, datamodule=dm, ckpt_path=ckpt)
 
 def main(args):
     pl.seed_everything(seed=args.seed, workers=True)
@@ -144,8 +124,8 @@ if __name__ == "__main__":
     parser.add_argument('--warm_up', default=21936, type=int, help='Number of warm up random steps for DQN')
     parser.add_argument('--eps_start', default=1.0, type=float, help='Epsilon at start of training for DQN')
     parser.add_argument('--eps_end', default=0.01, type=float, help='Epsilon at end of training for DQN')
-    parser.add_argument('--eps_stop', default=21936, type=int, help='Stop reducing epsilon after --eps_stop steps')
-    parser.add_argument('--sync_rate', default=500, type=int, help='Sync Q and target network every --sync_rate steps')
+    parser.add_argument('--eps_stop', default=10968, type=int, help='Stop reducing epsilon after --eps_stop steps')
+    parser.add_argument('--sync_rate', default=1000, type=int, help='Sync Q and target network every --sync_rate steps')
     parser.add_argument('--n_zones', default=20, type=int, help='Number of zones when rebuilding dataset')
     args = parser.parse_args()
     warnings.filterwarnings(action="ignore", category=pl.utilities.warnings.LightningDeprecationWarning)

@@ -217,19 +217,4 @@ class AreaDataModule(pl.LightningDataModule):
         a = a.groupby('Virtual_Start_Zone_Name')[['Virtual_Zone_Name', *a.columns[a.columns.str.contains('Vehicle_Model')].values.tolist()]].sum().reset_index()
         a['Time'] = self.timepoints[idx]
         return a
-
-class QDataModule(pl.LightningDataModule):
-    def __init__(self, buffer:ReplayBuffer, sample_size:int=1000, batch_size:int=16, num_workers=0):
-        super().__init__()
-
-        self.num_workers = num_workers
-        self.batch_size = batch_size
-        self.sample_size = sample_size
-        self.buffer = buffer
-
-    def setup(self, stage=None):
-        if stage in (None, "fit"):
-            self.train_data = QDataset(self.buffer, self.sample_size)
-
-    def train_dataloader(self):
-        return DataLoader(self.train_data, batch_size=self.batch_size, num_workers=self.num_workers)
+        

@@ -72,11 +72,11 @@ class Sim():
                         request[5])).sample(1).values.tolist()[0]  # Sample a destination from historical data based on origin and datetime
                 except KeyError: # No previous trip from origin area at this date and time. Pick random one.
                     d = np.random.randint(0, len(self.areas), 1).tolist()[0]
-                r =+ self.areas[request[5]].depart(
+                r += self.areas[request[5]].depart(
                     self,
                     self.areas[d],
                     request[1]) 
-                self.revenue += r
+        self.revenue += r
         self.i += 1
         return r
 
@@ -137,7 +137,6 @@ class Area(): # Contains area properties and states. Used in simulator
         self.cars = cars # [[Arrival][Plate][Model]]
 
     def arrival(self, time, car, model): # Only to be called by depart method from another area
-        print(self.total_cars())
         if self.total_cars() < self.max_cars: # If not enough space deny trip
             self.cars = np.vstack((self.cars, np.asarray((time, car, model), dtype=object)))
             return True
@@ -166,20 +165,20 @@ class Area(): # Contains area properties and states. Used in simulator
         return np.where(self.cars[:,0]<=time)[0]
 
 class Agent():
-    def __init__(self, replay_buffer:ReplayBuffer):
+    def __init__(self, replay_buffer:ReplayBuffer, time_end=datetime(2021, 5, 3, 23, 59, 59)):
+        self.time_end = time_end
         self.replay_buffer = replay_buffer
-        self.reset()        
+        self.reset()
 
     def reset(self):
-        self.sim = Sim()
+        self.sim = Sim(time_end=self.time_end)
         self.state, _ = self.sim.get_state()
 
-    def get_action(self, net:nn.Module, epsilon:float, device:str):
+    def get_action(self, net:nn.Module, epsilon:float, device):
         if net == None or np.random.random() < epsilon:
             action = np.random.randint(len(self.sim.areas),size=len(self.sim.areas))
         else:
-            if device not in ["cpu"]:
-                self.state = self.state.cuda(device)
+            self.state = self.state.to(device)
 
             q_values = net(self.state)
             _, action = torch.max(q_values, dim=1)

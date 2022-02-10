@@ -1,8 +1,15 @@
+from pathlib import Path
+from datetime import datetime
+import pickle
+from tqdm import tqdm
 import torch
 from torch import nn
 import torch.nn.functional as F
+from torch.utils.data import DataLoader
 import pytorch_lightning as pl
 from torchmetrics import F1
+from src.data.datasets import QDataset, ReplayBuffer
+from src.models.simulator import Agent
 
 class BC_Area_s1(pl.LightningModule): # Step 1: Decide to move or not
     def __init__(self, in_size, hidden_layers=(100, 50), lr=1e-5, l2=1e-5, pos_weight=25):
@@ -175,10 +182,13 @@ class Q(nn.Module):
 
 class DQN(pl.LightningModule):
     def __init__(
-        self, in_out, agent, hidden_layers=[50, 20], lr=1e-3, l2=1e-8, gamma=0.999,
-        sync_rate=10, eps_stop=1000, eps_start=1.0, eps_end=0.01, double_dqn=False):
+        self, in_out, hidden_layers=[50, 20], buffer_capacity=1000000, warm_up=21936, sample_size=21936, batch_size=32,
+        num_workers=0, lr=1e-3, l2=1e-8, gamma=0.999, sync_rate=10, eps_stop=1000, eps_start=1.0, eps_end=0.01, time_end=datetime(2020,6,1,0,0,0),
+        double_dqn=False):
         super().__init__()
-        self.save_hyperparameters(ignore=[agent])
+
+        self.save_hyperparameters()
+        self.create_buffer_agent()
 
         self.Q = Q(in_out, hidden_layers)
         self.target = Q(in_out, hidden_layers)
@@ -188,8 +198,23 @@ class DQN(pl.LightningModule):
         self.episode_reward = 0
         self.total_reward = 0
 
+    def create_buffer_agent(self):
+        if not (Path('.') / 'data' / 'processed' / 'buffer.pkl').is_file():
+            buffer = ReplayBuffer(self.hparams.buffer_capacity)
+            agent = Agent(buffer, time_end=self.hparams.time_end)
+            print('Populating buffer')
+            for _ in tqdm(range(self.hparams.warm_up)):
+                agent.play_step(net=None, epsilon=1.0)
+            with open(str(Path('.') / 'data' / 'processed' / 'buffer.pkl'), 'wb') as f:
+                    pickle.dump(buffer, f)
+        else:
+            with open(str(Path('.') / 'data' / 'processed' / 'buffer.pkl'), 'rb') as f:
+                buffer = pickle.load(f)
+            agent = Agent(buffer, time_end=self.hparams.time_end)
+        self.buffer, self.agent = buffer, agent
+
     def forward(self, s):
-        return self(s)
+        return self.Q(s)
 
     def dqn_loss(self, batch):
         states, actions, rewards, dones, next_states = batch
@@ -234,7 +259,7 @@ class DQN(pl.LightningModule):
             self.hparams.eps_end,
             self.hparams.eps_start - self.global_step + 1 / self.hparams.eps_stop)
 
-        reward, done = self.hparams.agent.play_step(self.Q, epsilon, self.device)
+        reward, done = self.agent.play_step(self.Q, epsilon, self.device)
         self.episode_reward += reward
 
         loss = self.loss(batch)
@@ -245,7 +270,6 @@ class DQN(pl.LightningModule):
         if done:
             self.total_reward = self.episode_reward
             self.episode_reward = 0
-            self.log("Total_reward", self.total_reward, sync_dist=True)
 
         if self.global_step % self.hparams.sync_rate == 0:
             self.target.load_state_dict(self.Q.state_dict())
@@ -255,12 +279,17 @@ class DQN(pl.LightningModule):
             "total_reward": torch.tensor(self.total_reward).to(self.device),
         }
 
+        self.log("Total_reward", self.total_reward, sync_dist=True)
         self.log("Loss", loss, sync_dist=True)
         
         return {"loss": loss, "progress_bar": status}
 
     def configure_optimizers(self):
-        return torch.optim.Adam(self.Q.parameters(), lr=self.hparams.lr, weight_decay=self.hparams.l2)
+        return torch.optim.Adam(self.Q.parameters(), lr=self.hparams.lr)
+    
+    def train_dataloader(self):
+        train_data = QDataset(self.buffer, self.hparams.sample_size)
+        return DataLoader(train_data, batch_size=self.hparams.batch_size, num_workers=self.hparams.num_workers)
 
 class DDPG(pl.LightningModule):
     def __init__(self, Pin_out, Qin_sizes, hidden_layers_policy=[50, 20], hidden_layers_Q=[50, 20],

@@ -7,15 +7,19 @@ import numpy as np
 import pandas as pd
 import torch
 from src.models.simulator import Sim
-from src.models.models import BC_Area_s1, BC_Area_s2, BCLSTM_Area_s1
+from src.models.models import BC_Area_s1, BC_Area_s2, BCLSTM_Area_s1, DQN
 from pyproj import Geod
 wgs84_geod = Geod(ellps='WGS84')
 pd.options.mode.chained_assignment = None 
 
 def get_ckpt_path(args):
-    ckpt_path_s1 = (Path('.') / 'models' / "stage_1" / 'lightning_logs' / str('version_' + str(args.stage_1_version)) / 'checkpoints' / '*.ckpt')
-    ckpt_path_s2 = (Path('.') / 'models' / "stage_2" / 'lightning_logs' / str('version_' + str(args.stage_2_version)) / 'checkpoints' / '*.ckpt')
-    return Path('.') / max(glob.glob(str(ckpt_path_s1)), key=os.path.getmtime), Path('.') / max(glob.glob(str(ckpt_path_s2)), key=os.path.getmtime)
+    if args.dqn:
+        ckpt_path = (Path('.') / 'models' / "dqn" / 'lightning_logs' / str('version_' + str(args.dqn_version)) / 'checkpoints' / '*.ckpt')
+        return Path('.') / max(glob.glob(str(ckpt_path)), key=os.path.getmtime)
+    else:
+        ckpt_path_s1 = (Path('.') / 'models' / "stage_1" / 'lightning_logs' / str('version_' + str(args.stage_1_version)) / 'checkpoints' / '*.ckpt')
+        ckpt_path_s2 = (Path('.') / 'models' / "stage_2" / 'lightning_logs' / str('version_' + str(args.stage_2_version)) / 'checkpoints' / '*.ckpt')
+        return Path('.') / max(glob.glob(str(ckpt_path_s1)), key=os.path.getmtime), Path('.') / max(glob.glob(str(ckpt_path_s2)), key=os.path.getmtime)
 
 def run_hist(args):
     actions = pd.read_csv((Path('.') / 'data' / 'processed' / 'actions.csv'), parse_dates=['Time'])
@@ -39,7 +43,6 @@ def run_no_moves(args):
 
 def run_single_moves(args):
     pd.DataFrame([]).to_csv(f'reports/sim_{args.steps}_me.csv', index=False, header=False)
-    pd.DataFrame([]).to_csv(f'reports/sim_{args.steps}_tc.csv', index=False, header=False)
     for _ in tqdm(range(args.runs)):
         sim = Sim()
         for i, t in enumerate(tqdm(sim.timepoints[:-1], leave=False)):
@@ -49,7 +52,6 @@ def run_single_moves(args):
                 sim.move_car(
                     np.random.randint(0, len(sim.areas), 1).tolist()[0], 
                     3) # Moves 1 random car to area 3
-            pd.DataFrame(tc).to_csv(f'reports/sim_{args.steps}_tc.csv', index=False, header=False, mode='a')
         pd.DataFrame([sim.get_revenue()]).to_csv(f'reports/sim_{args.steps}_me.csv', index=False, header=False, mode='a')
 
 def run_bc(args):
@@ -76,23 +78,47 @@ def run_bc(args):
                     sim.move_car(a.item(), dest[j].item())
         pd.DataFrame([sim.get_revenue()]).to_csv(f'reports/sim_{args.stage_1_version}{args.stage_2_version}_bc.csv', index=False, header=False, mode='a')
 
+def run_orl(args):
+    path = get_ckpt_path(args)
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    dqn = DQN.load_from_checkpoint(path).to(device)
+    dqn.eval()
+
+    if not (Path('.') / 'reports' / f'sim_{args.dqn_version}_rl.csv').is_file():
+        pd.DataFrame([]).to_csv(f'reports/sim_{args.dqn_version}_rl.csv', index=False, header=False)
+    
+    for _ in tqdm(range(args.runs)):
+        sim = Sim()
+        for _ in tqdm(sim.timepoints[:-1], leave=False):
+            sim.step()
+            s, _ = sim.get_state()
+            s = s.to(device)
+            _, dests = torch.max(dqn(s), dim=1)
+            for a, dest in enumerate(dests):
+                sim.move_car(a, dest.item())
+        pd.DataFrame([sim.get_revenue()]).to_csv(f'reports/sim_{args.dqn_version}_rl.csv', index=False, header=False, mode='a')
+
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument('--hist', action='store_true', help='Simulate moving cars according to history')
     parser.add_argument('--no_moves', action='store_true', help='Simulate without moving cars')
     parser.add_argument('--single', action='store_true', help='Simulate moving a single random car to area 3 every --steps steps')
     parser.add_argument('--bc', action='store_true', help='Simulate with behavioural cloning')
+    parser.add_argument('--dqn', action='store_true', help='Simulate with DQN')
     parser.add_argument('--runs', default=10, type=int)
     parser.add_argument('--steps', default=10, type=int)
     parser.add_argument('--stage_1_version', default=0, type=int, help='Version to load from lightning_logs/version_#/checkpoint/.')
     parser.add_argument('--stage_2_version', default=0, type=int, help='Version to load from lightning_logs/version_#/checkpoint/.')
+    parser.add_argument('--dqn_version', default=0, type=int, help='Version to load from lightning_logs/version_#/checkpoint/.')
     args = parser.parse_args()
 
     if args.hist:
         run_hist(args)
-    if args.no_moves:
+    elif args.no_moves:
         run_no_moves(args)
-    if args.single:
+    elif args.single:
         run_single_moves(args)
-    if args.bc:
+    elif args.bc:
         run_bc(args)
+    elif args.dqn:
+        run_orl(args)
