@@ -5,10 +5,13 @@ import pandas as pd
 import torch
 from torch import nn
 from itertools import product
-from tqdm import tqdm
 from pyproj import Geod
 from src.data.datasets import ReplayBuffer
 wgs84_geod = Geod(ellps='WGS84') # Distance will be measured in meters on this ellipsoid - more accurate than a spherical method
+
+# Moves on each step based on cost
+# Conservative Q learning
+# Policy result analysis. Vs demand too
 
 class Sim():
     def __init__(self, time_step:timedelta=timedelta(minutes=30), time_start=datetime(2020, 2, 2, 0, 0, 0), time_end=datetime(2021, 5, 3, 23, 59, 59)):
@@ -16,10 +19,11 @@ class Sim():
         self.timepoints = np.arange(time_start, time_end, time_step).astype(datetime)
         self.reference_datetime = datetime(2000,1,1)
         self.timepoints_secs = ((self.timepoints-self.reference_datetime).astype('timedelta64[ms]')/1000).astype(int)
-        self.dist2time = 0.846283 # Factor to get travel time from distance in s/m (Avg. trip duration/Avg. dist)
-        self.dist2reve = 1.851  # Factor to get revenue from distance
-        self.r2t = 0.1256 # Fraction of requests that turn to trips
-        self.max_dist = 500 # Maximum distance from request to area (walking distance)
+        self.dist2time = 1 # Factor to get travel time from distance in s/m (Avg. trip duration/Avg. dist)
+        self.dist2reve = 0.00001  # Factor to get revenue from distance
+        self.rcr = 3 # Cost of making a move (Ratio of revenue to cost for moves)
+        self.r2t = 0.125 # Fraction of requests that turn to trips
+        self.max_dist = 5000 # Maximum distance from request to area (walking distance)
         self.max_cars = 1000 # Max cars per area
         self.i = int(0)
 
@@ -29,20 +33,14 @@ class Sim():
         rentals = pd.read_csv((Path('.') / 'data' / 'interim' / 'rental.csv'), parse_dates=['Start_Datetime_Local'])
         self.car_locs = rentals.groupby('Vehicle_Number_Plate')[['Virtual_Start_Zone_Name', 'Vehicle_Model']].first().reset_index()
         self.car_locs['Arrival'] = int((time_start-self.reference_datetime).total_seconds())
-        rentals['Month'] = rentals['Start_Datetime_Local'].dt.month
         rentals['Weekday'] = rentals['Start_Datetime_Local'].dt.weekday
         rentals['Hour'] = rentals['Start_Datetime_Local'].dt.hour
-        self.dest = rentals.groupby(['Month', 'Weekday', 'Hour', 'Virtual_Start_Zone_Name'])['Virtual_End_Zone_Name']
+        self.dest = rentals.groupby(['Weekday', 'Hour', 'Virtual_Start_Zone_Name'])['Virtual_End_Zone_Name']
 
         vmodels = pd.read_csv((Path('.') / 'data' / 'processed' / 'locations.csv'), nrows=1)
         self.vmodels = vmodels.columns[vmodels.columns.str.contains('Vehicle')].str.replace('Vehicle_Model_', '')
 
-        if not (Path('.') / 'data' / 'processed' / 'requests.csv').is_file():
-            tqdm.pandas()
-            self.openings = pd.read_csv((Path('.') / 'data' / 'interim' / 'openings.csv'), parse_dates=['Created_Datetime_Local'])
-            self.requests = self.openings.progress_apply(self.dr2a, axis=1)
-            self.requests.to_csv(Path('.') / 'data' / 'processed' / 'requests.csv', index=False)
-        self.requests = pd.read_csv((Path('.') / 'data' / 'processed' / 'requests.csv'), parse_dates=['Created_Datetime_Local'])
+        self.requests = pd.read_csv((Path('.') / 'data' / 'interim' / 'openings.csv'), parse_dates=['Created_Datetime_Local'])
         self.requests['Created_Datetime_Local'] = ((self.requests['Created_Datetime_Local']-self.reference_datetime).astype('timedelta64[ms]')/1000).astype(int)
 
         self.dists = np.zeros([len(self.area_centers), len(self.area_centers)])
@@ -59,37 +57,45 @@ class Sim():
         self.demand = self.requests[(self.requests['Created_Datetime_Local']>=self.timepoints_secs[0]) & (self.requests['Created_Datetime_Local']<self.timepoints_secs[1])]
 
     def step(self): # idx only to get statistical data
-        self.demand = self.requests.loc[(self.requests['Created_Datetime_Local']>=self.timepoints_secs[self.i]) & (self.requests['Created_Datetime_Local']<self.timepoints_secs[self.i+1])].copy()
-        rs = self.demand.sample(frac=self.r2t)
-        r = 0
-        for request in rs.itertuples():
-            if request[6]<=self.max_dist:
-                try:
-                    d = self.dest.get_group((
-                        self.timepoints[self.i].month, 
-                        self.timepoints[self.i].weekday(), 
-                        self.timepoints[self.i].hour, 
-                        request[5])).sample(1).values.tolist()[0]  # Sample a destination from historical data based on origin and datetime
-                except KeyError: # No previous trip from origin area at this date and time. Pick random one.
-                    d = np.random.randint(0, len(self.areas), 1).tolist()[0]
-                r += self.areas[request[5]].depart(
-                    self,
-                    self.areas[d],
-                    request[1]) 
-        self.revenue += r
-        self.i += 1
-        return r
+        try:
+            self.demand = self.requests.loc[(self.requests['Created_Datetime_Local']>=self.timepoints_secs[self.i]) & (self.requests['Created_Datetime_Local']<self.timepoints_secs[self.i+1])].copy()
+            rs = self.demand.sample(frac=self.r2t)
+            r = 0
+            for request in rs.itertuples():
+                if request[6]<=self.max_dist:
+                    try:
+                        d = self.dest.get_group((
+                            self.timepoints[self.i].weekday(), 
+                            self.timepoints[self.i].hour, 
+                            request[5])).sample(1).values.tolist()[0]  # Sample a destination from historical data based on origin and datetime
+                    except KeyError: # No previous trip from origin area at this date and time. Pick random one.
+                        d = np.random.randint(0, len(self.areas), 1).tolist()[0]
+                    r += self.areas[request[5]].depart(
+                        self,
+                        self.areas[d],
+                        request[1]) 
+            self.revenue += r
+            self.i += 1
+            return r
+        except IndexError:
+            print("Simulation period ended!")
+            pass
 
     def get_revenue(self):
         return self.revenue
 
-    def get_state(self): # Returns batch with steat for each area
+    def get_state(self): # Returns batch with state for each area
         time = self.timepoints_secs[self.i]
         locs = np.hstack(
             [np.array([([a.name]*len(a.available_cars(time))),
              (a.cars[a.available_cars(time),2].tolist())]) for a in self.areas]).T # [[Location][Plate][Model]]
 
-        cs = [torch.tensor([self.timepoints[self.i].month, self.timepoints[self.i].day, self.timepoints[self.i].hour]), 
+        day = torch.zeros(7)
+        day[self.timepoints[self.i].weekday()] = 1
+        hour = torch.zeros(24)
+        hour[self.timepoints[self.i].hour] = 1
+
+        cs = [day, hour, 
             torch.tensor(self.open2dem(self.demand, self.area_centers).tolist()),
             torch.tensor([len(a.available_cars(self.timepoints_secs[self.i])) for a in self.areas])] # Constant dimensions in step
 
@@ -101,7 +107,8 @@ class Sim():
         return s, d
 
     def move_car(self, origin, dest, model=None):
-        self.areas[origin].depart(self, self.areas[dest], self.timepoints_secs[self.i], model=model)
+        c = self.areas[origin].depart(self, self.areas[dest], self.timepoints_secs[self.i], model=model)
+        self.revenue += -c/self.rcr
 
     def dr2a(self, row): # Distance from request to area
         _,_,dists = wgs84_geod.inv(
@@ -154,6 +161,7 @@ class Area(): # Contains area properties and states. Used in simulator
                 except IndexError: # If no cars of this model, choose from anything else
                     pass
             if destination.arrival(time, self.cars[car_i, 1], self.cars[car_i, 2]):
+                #print(self.name, "to", destination.name)
                 revenue = distance*params.dist2reve
                 self.cars = np.delete(self.cars, car_i, axis=0)
         return revenue
@@ -165,13 +173,16 @@ class Area(): # Contains area properties and states. Used in simulator
         return np.where(self.cars[:,0]<=time)[0]
 
 class Agent():
-    def __init__(self, replay_buffer:ReplayBuffer, time_end=datetime(2021, 5, 3, 23, 59, 59)):
+    def __init__(self, replay_buffer:ReplayBuffer, time_step=timedelta(minutes=30), time_start=datetime(2020, 2, 2, 0, 0, 0), time_end=datetime(2021, 5, 3, 23, 59, 59), save_step=True):
+        self.save = save_step
+        self.time_step = time_step
+        self.time_start = time_start
         self.time_end = time_end
         self.replay_buffer = replay_buffer
         self.reset()
 
     def reset(self):
-        self.sim = Sim(time_end=self.time_end)
+        self.sim = Sim(time_step=self.time_step, time_start=self.time_start, time_end=self.time_end)
         self.state, _ = self.sim.get_state()
 
     def get_action(self, net:nn.Module, epsilon:float, device):
@@ -197,13 +208,14 @@ class Agent():
 
         new_state, done = self.sim.get_state()
 
-        for i, action in enumerate(actions):
-            self.replay_buffer.append(
-                (self.state[i].cpu().detach().numpy(), 
-                action, 
-                reward, 
-                done, 
-                new_state[i].cpu().detach().numpy()))
+        if self.save:
+            for i, action in enumerate(actions):
+                self.replay_buffer.append(
+                    (self.state[i].cpu().detach().numpy(), 
+                    action, 
+                    reward, 
+                    done, 
+                    new_state[i].cpu().detach().numpy()))
 
         self.state = new_state
         if done:
