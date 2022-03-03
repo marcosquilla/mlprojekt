@@ -1,5 +1,5 @@
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 import pickle
 from tqdm import tqdm
 import torch
@@ -40,7 +40,7 @@ class BC_Area_s1(pl.LightningModule): # Step 1: Decide to move or not
 
     def training_step(self, batch, batch_idx):
         s, a = batch
-        a_logits = self(s).squeeze()
+        a_logits = self(s).reshape(-1)
         loss = self.criterion(a_logits, a.float())
         self.f1_train(torch.sigmoid(a_logits), a)
         self.log('Loss', loss, logger=True, sync_dist=True)
@@ -49,7 +49,7 @@ class BC_Area_s1(pl.LightningModule): # Step 1: Decide to move or not
 
     def validation_step(self, batch, batch_idx):
         s, a = batch
-        a_logits = self(s).squeeze()
+        a_logits = self(s).reshape(-1)
         self.f1_val(torch.sigmoid(a_logits), a)
         self.log('measure', self.f1_val, logger=True, sync_dist=True)
 
@@ -182,9 +182,10 @@ class Q(nn.Module):
 
 class DQN(pl.LightningModule):
     def __init__(
-        self, in_out, hidden_layers=[50, 20], buffer_capacity=1000000, warm_up=21936, sample_size=21936, batch_size=32,
-        num_workers=0, lr=1e-3, l2=1e-8, gamma=0.999, sync_rate=10, eps_stop=1000, eps_start=1.0, eps_end=0.01, time_end=datetime(2020, 4, 1, 0, 0, 0),
-        double_dqn=False):
+        self, in_out, hidden_layers, buffer_capacity=1000000, warm_up=21936, sample_size=21936, batch_size=32,
+        num_workers=0, lr=1e-3, l2=1e-8, gamma=0.999, sync_rate=10, eps_stop=1000, eps_start=1.0, eps_end=0.01, 
+        time_step=timedelta(minutes=30), time_start=datetime(2020, 2, 2, 0, 0, 0),time_end=datetime(2021, 5, 1, 0, 0, 0),
+        double_dqn=True, normalise_reward=True):
         super().__init__()
 
         self.save_hyperparameters()
@@ -209,18 +210,19 @@ class DQN(pl.LightningModule):
         with torch.no_grad():
             if self.hparams.double_dqn:
                 next_outputs = self.Q(next_states)
-                next_state_acts = next_outputs.max(1)[1].unsqueeze(-1)  # take action at the index with the highest value
+                next_state_acts = next_outputs.max(1)[1].unsqueeze(-1)  # Take action at the index with the highest value
                 next_tgt_out = self.target(next_states)
                 # Take the value of the action chosen by the train network
                 next_state_values = next_tgt_out.gather(1, next_state_acts).squeeze(-1)
-                next_state_values[dones] = 0.0
-                next_state_values = next_state_values.detach()
             else:
                 next_state_values = self.target(next_states).max(1)[0]
-                next_state_values[dones] = 0.0
-                next_state_values = next_state_values.detach()
+                
+            next_state_values[dones] = 0.0
+            next_state_values = next_state_values.detach()
 
         expected_state_action_values = next_state_values * self.hparams.gamma + rewards
+        if self.hparams.normalise_reward:
+            expected_state_action_values = (expected_state_action_values-expected_state_action_values.mean())/expected_state_action_values.std()
 
         return F.mse_loss(state_action_values, expected_state_action_values)
 
@@ -243,6 +245,8 @@ class DQN(pl.LightningModule):
 
         if self.global_step % self.hparams.sync_rate == 0:
             self.target.load_state_dict(self.Q.state_dict())
+            with open(str(Path('.') / 'data' / 'processed' / f'buffer{self.hparams.time_end.year}{self.hparams.time_end.month}.pkl'), 'wb') as f:
+                    pickle.dump(self.buffer, f)
 
         status = {
             "steps": torch.tensor(self.global_step).to(self.device),
@@ -262,16 +266,101 @@ class DQN(pl.LightningModule):
         return DataLoader(train_data, batch_size=self.hparams.batch_size, num_workers=self.hparams.num_workers)
 
     def create_buffer_agent(self):
-        if not (Path('.') / 'data' / 'processed' / 'buffer.pkl').is_file():
+        if not (Path('.') / 'data' / 'processed' / f'buffer{self.hparams.time_end.year}{self.hparams.time_end.month}.pkl').is_file():
             buffer = ReplayBuffer(self.hparams.buffer_capacity)
-            agent = Agent(buffer, time_end=self.hparams.time_end)
+            agent = Agent(buffer, time_step=self.hparams.time_step, time_start=self.hparams.time_start, time_end=self.hparams.time_end)
             print('Populating buffer')
-            for _ in tqdm(range(self.hparams.warm_up)):
+            for _ in tqdm(range(self.hparams.warm_up), smoothing=0.1):
                 agent.play_step(net=None, epsilon=1.0)
-            with open(str(Path('.') / 'data' / 'processed' / 'buffer.pkl'), 'wb') as f:
+            with open(str(Path('.') / 'data' / 'processed' / f'buffer{self.hparams.time_end.year}{self.hparams.time_end.month}.pkl'), 'wb') as f:
                     pickle.dump(buffer, f)
         else:
-            with open(str(Path('.') / 'data' / 'processed' / 'buffer.pkl'), 'rb') as f:
+            with open(str(Path('.') / 'data' / 'processed' / f'buffer{self.hparams.time_end.year}{self.hparams.time_end.month}.pkl'), 'rb') as f:
                 buffer = pickle.load(f)
-            agent = Agent(buffer, time_end=self.hparams.time_end)
+            agent = Agent(buffer, time_step=self.hparams.time_step, time_start=self.hparams.time_start, time_end=self.hparams.time_end)
+        self.buffer, self.agent = buffer, agent
+
+class CQN(pl.LightningModule):
+    def __init__(
+        self, in_out, hidden_layers, buffer_code, buffer_capacity=1000000, warm_up=21936, sample_size=21936, batch_size=32,
+        num_workers=0, lr=1e-3, l2=1e-8, gamma=0.999, sync_rate=10, eps_stop=1000, eps_start=1.0, eps_end=0.01, 
+        time_step=timedelta(minutes=30), time_start=datetime(2021, 1, 1, 0, 0, 0),time_end=datetime(2021, 5, 3, 23, 59, 59),
+        normalise_reward=True):
+        super().__init__()
+
+        self.save_hyperparameters()
+        self.get_buffer()
+
+        self.Q = Q(in_out, hidden_layers)
+        self.target = Q(in_out, hidden_layers)
+
+        self.episode_reward = 0
+        self.total_reward = 0
+
+    def forward(self, s):
+        return self.Q(s)
+
+    def loss(self, batch):
+        states, actions, rewards, dones, next_states = batch
+
+        states = states.float()
+        states.requires_grad_(True)
+        Q_a_s = self.Q(states)
+        state_action_values = Q_a_s.gather(1, actions.unsqueeze(-1)).squeeze(-1)
+
+        with torch.no_grad():
+            next_state_values = self.target(next_states).max(1)[0]
+
+        next_state_values[dones] = 0.0
+        next_state_values = next_state_values.detach()
+        expected_state_action_values = next_state_values * self.hparams.gamma + rewards
+
+        if self.hparams.normalise_reward:
+            expected_state_action_values = (expected_state_action_values-expected_state_action_values.mean())/expected_state_action_values.std()
+
+        cql1_loss = torch.logsumexp(Q_a_s, dim=1).mean() - Q_a_s.mean()
+
+        bellman_error = F.mse_loss(state_action_values, expected_state_action_values)
+
+        return cql1_loss + bellman_error/2
+
+    def training_step(self, batch, batch_idx):
+        loss = self.loss(batch)
+
+        if self.trainer._distrib_type in {pl.utilities.DistributedType.DP, pl.utilities.DistributedType.DDP2}:
+            loss = loss.unsqueeze(0)
+
+        if self.global_step % self.hparams.sync_rate == 0:
+            self.target.load_state_dict(self.Q.state_dict())
+
+        status = {
+            "steps": torch.tensor(self.global_step).to(self.device)
+        }
+        self.log("Loss", loss, sync_dist=True)
+        
+        return {"loss": loss, "progress_bar": status}
+
+    def validation_step(self, batch, batch_idx):
+        done = False
+        self.total_reward = 0
+        while not done:
+            reward, done = self.agent.play_step(self.Q, 0, self.device)
+            self.total_reward += reward
+        self.log('Total_reward', self.total_reward, logger=True, sync_dist=True)
+
+    def configure_optimizers(self):
+        return torch.optim.Adam(self.Q.parameters(), lr=self.hparams.lr)
+    
+    def train_dataloader(self):
+        train_data = QDataset(self.buffer, self.hparams.sample_size)
+        return DataLoader(train_data, batch_size=self.hparams.batch_size, num_workers=self.hparams.num_workers)
+
+    def val_dataloader(self):
+        val_data = QDataset(self.buffer, self.hparams.batch_size)
+        return DataLoader(val_data, batch_size=self.hparams.batch_size, num_workers=0)
+
+    def get_buffer(self):
+        with open(str(Path('.') / 'data' / 'processed' / f'buffer{self.hparams.buffer_code}.pkl'), 'rb') as f:
+                buffer = pickle.load(f)
+        agent = Agent(buffer, time_step=self.hparams.time_step, time_start=self.hparams.time_start, time_end=self.hparams.time_end, save_step=False)
         self.buffer, self.agent = buffer, agent
