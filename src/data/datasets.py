@@ -35,13 +35,16 @@ class AreaDataset_s1(Dataset):
 
     def state(self, idx):
         # Auxiliary method for __getitem__. Joins vehicle locations and demand
+        day = torch.zeros(7)
+        day[self.Tindices[idx][0].weekday()] = 1
+        hour = torch.zeros(24)
+        hour[self.Tindices[idx][0].hour] = 1
         dem = tuple(self.demand[self.Tindices[idx][0]].values()) # Use the list for faster indexing
         count = tuple(self.vehicle_counts[self.Tindices[idx][0]].values()) # Use the list for faster indexing
         loc = self.locations[self.indices[idx]] # Use list for faster indexing
         return torch.hstack(
-            (torch.tensor(self.Tindices[idx][0].month), 
-            torch.tensor(self.Tindices[idx][0].day), 
-            torch.tensor(self.Tindices[idx][0].hour), 
+            (day, 
+            hour, 
             torch.tensor(dem),
             torch.tensor(count), 
             torch.tensor(loc)))
@@ -86,13 +89,16 @@ class AreaDataset_s2(Dataset):
 
     def state(self, idx):
         # Auxiliary method for __getitem__. Joins vehicle locations and demand
+        day = torch.zeros(7)
+        day[self.Tindices[idx][0].weekday()] = 1
+        hour = torch.zeros(24)
+        hour[self.Tindices[idx][0].hour] = 1
         dem = tuple(self.demand[self.Tindices[idx][0]].values()) # Use the list for faster indexing
         count = tuple(self.vehicle_counts[self.Tindices[idx][0]].values()) # Use the list for faster indexing
         loc = self.locations.loc[self.Tindices[idx][0], self.Tindices[idx][1]].values
         return torch.hstack(
-            (torch.tensor(self.Tindices[idx][0].month), 
-            torch.tensor(self.Tindices[idx][0].day), 
-            torch.tensor(self.Tindices[idx][0].hour), 
+            (day,
+            hour,
             torch.tensor(dem), 
             torch.tensor(count),
             torch.tensor(loc)))
@@ -136,12 +142,13 @@ class DayDataset_s1(Dataset):
 
     def state(self, idx):
         # Auxiliary method for __getitem__. Joins vehicle locations and demand
+        day = torch.zeros((len(dem),7))
+        day[:,self.Tindices[idx][0].weekday()] = 1
         dem = self.demand.loc[self.Tindices[idx][0]].values.tolist()
         count = self.vehicle_counts.loc[self.Tindices[idx][0]].values.tolist()
         loc = self.locations.loc[self.Tindices[idx][0],self.Tindices[idx][1]].values.tolist()
         return torch.hstack(
-            (torch.full((len(dem),1), self.Tindices[idx][0].month),
-            torch.full((len(dem),1), self.Tindices[idx][0].day),
+            (day,
             torch.tensor(dem),
             torch.tensor(count),
             torch.tensor(loc)))
@@ -163,7 +170,7 @@ class DayDataset_s1(Dataset):
 class QDataset(IterableDataset):
     def __init__(self, buffer, sample_size: int = 200):
         self.buffer = buffer
-        self.sample_size = sample_size
+        self.sample_size = min(sample_size, len(buffer))
 
     def __iter__(self):
         states, actions, rewards, dones, new_states = self.buffer.sample(self.sample_size)
