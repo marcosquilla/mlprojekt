@@ -10,7 +10,7 @@ from sklearn.cluster import KMeans
 from sklearn.metrics import silhouette_score
 from pyproj import Geod
 from tqdm import tqdm
-from src.data.datasets import AreaDataset_s1, AreaDataset_s2, DayDataset_s1, QDataset, ReplayBuffer
+from src.data.datasets import AreaDataset_s1, AreaDataset_s2, DayDataset_s1
 
 class AreaDataModule(pl.LightningDataModule):
     def __init__(self, s, lstm, batch_size:int=16, time_step:timedelta=timedelta(minutes=30), time_window:timedelta=timedelta(minutes=30),
@@ -28,7 +28,7 @@ class AreaDataModule(pl.LightningDataModule):
 
         self.num_workers = num_workers
         self.batch_size = batch_size
-        self.time_window = time_window
+        self.time_window = time_step
         self.time_step = time_step
         self.timepoints = np.arange(time_start, time_end, time_step).astype(datetime)
         self.n_zones = n_zones
@@ -73,6 +73,7 @@ class AreaDataModule(pl.LightningDataModule):
         swlon=12.140848911388979
         nelat=56.06417055142977
         nelon=12.688363746232875
+        self.wgs84_geod = Geod(ellps='WGS84') # Distance will be measured in meters on this ellipsoid - more accurate than a spherical method
         # Takes raw files, concatenates them, selects useful columns and saved into a single file.
         if not ((Path('.') / 'data' / 'interim' / 'rental.csv').is_file() and 
                 (Path('.') / 'data' / 'processed' / 'areas.csv').is_file()):
@@ -138,12 +139,16 @@ class AreaDataModule(pl.LightningDataModule):
             openings = openings[
                 (openings['GPS_Latitude'] > swlat) & (openings['GPS_Latitude'] < nelat) & 
                 (openings['GPS_Longitude'] > swlon) & (openings['GPS_Longitude'] < nelon)]
+            tqdm.pandas()
+            self.area_centers = pd.read_csv((Path('.') / 'data' / 'processed' / 'areas.csv'))
+            openings = openings.progress_apply(self.dr2a, axis=1)
             openings.to_csv(Path('.') / 'data' / 'interim' / 'openings.csv', index=False)
 
         if not ((Path('.') / 'data' / 'processed' / 'locations.csv').is_file() and
                 (Path('.') / 'data' / 'processed' / 'actions.csv').is_file()):
             print('Creating locations and actions datasets')
             self.rental = pd.read_csv((Path('.') / 'data' / 'interim' / 'rental.csv'), parse_dates=['Start_Datetime_Local', 'End_Datetime_Local'], low_memory=False)
+            self.area_centers = pd.read_csv((Path('.') / 'data' / 'processed' / 'areas.csv'))
             self.rental = pd.get_dummies(self.rental, columns=['Vehicle_Model'])
             self.rental.rename(columns={'Virtual_End_Zone_Name': 'Virtual_Zone_Name'}, inplace=True) # Rename
 
@@ -160,7 +165,6 @@ class AreaDataModule(pl.LightningDataModule):
         
         if not (Path('.') / 'data' / 'processed' / 'demand.csv').is_file():
             print('Creating demand dataset')
-            self.wgs84_geod = Geod(ellps='WGS84') # Distance will be measured in meters on this ellipsoid - more accurate than a spherical method
             self.area_centers = pd.read_csv((Path('.') / 'data' / 'processed' / 'areas.csv'), index_col=0)
             self.openings = pd.read_csv((Path('.') / 'data' / 'interim' / 'openings.csv'), parse_dates=['Created_Datetime_Local'])
 
@@ -173,7 +177,7 @@ class AreaDataModule(pl.LightningDataModule):
                 demand_dist.to_csv(Path('.') / 'data' / 'processed' / 'demand.csv', index=True, header=False, mode='a')
                 del demand_dist
 
-            del self.openings, self.area_centers, self.wgs84_geod
+            del self.openings, self.area_centers
 
     def coords_to_areas(self, target):
         # Auxiliary method for demand. Calculate to which area an opening's coordinates (target) "belong to".
@@ -202,7 +206,7 @@ class AreaDataModule(pl.LightningDataModule):
         current_trips = self.rental[(self.rental['Start_Datetime_Local'] < self.timepoints[idx]) & (self.rental['End_Datetime_Local'] >= self.timepoints[idx])] # Cars in use
         loc = loc[~loc['Vehicle_Number_Plate'].isin(current_trips['Vehicle_Number_Plate'])] # Filter out cars in use
         loc = loc.groupby('Virtual_Zone_Name')[loc.columns[loc.columns.str.contains('Vehicle_Model')].values].sum().reset_index()
-        for mz in np.arange(self.n_zones)[~(np.isin(np.arange(self.n_zones),loc['Virtual_Zone_Name']))]: # Add zones with 0 cars
+        for mz in np.arange(len(self.area_centers))[~(np.isin(np.arange(len(self.area_centers)),loc['Virtual_Zone_Name']))]: # Add zones with 0 cars
             loc.loc[mz-0.5] = np.zeros(len(loc.columns))
             loc.loc[mz-0.5, 'Virtual_Zone_Name'] = mz
             loc = loc.sort_index().reset_index(drop=True)
@@ -217,4 +221,13 @@ class AreaDataModule(pl.LightningDataModule):
         a = a.groupby('Virtual_Start_Zone_Name')[['Virtual_Zone_Name', *a.columns[a.columns.str.contains('Vehicle_Model')].values.tolist()]].sum().reset_index()
         a['Time'] = self.timepoints[idx]
         return a
+
+    def dr2a(self, row): # Distance from request to area
+        _,_,dists = self.wgs84_geod.inv(
+                self.area_centers['GPS_Longitude'], self.area_centers['GPS_Latitude'],
+                np.full(len(self.area_centers),row['GPS_Longitude']), np.full(len(self.area_centers),row['GPS_Latitude']))
+        ca = np.argmin(dists)
+        row['Area'] = ca
+        row['Distance'] = dists[ca]
+        return row
         
