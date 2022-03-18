@@ -9,19 +9,16 @@ from pyproj import Geod
 from src.data.datasets import ReplayBuffer
 wgs84_geod = Geod(ellps='WGS84') # Distance will be measured in meters on this ellipsoid - more accurate than a spherical method
 
-# Moves on each step based on cost
-# Conservative Q learning
-# Policy result analysis. Vs demand too
 
 class Sim():
-    def __init__(self, time_step:timedelta=timedelta(minutes=30), time_start=datetime(2020, 2, 2, 0, 0, 0), time_end=datetime(2021, 5, 3, 23, 59, 59)):
+    def __init__(self, time_step:timedelta=timedelta(minutes=30), time_start=datetime(2020, 2, 2, 0, 0, 0), time_end=datetime(2021, 5, 3, 23, 59, 59), cost=1):
 
         self.timepoints = np.arange(time_start, time_end, time_step).astype(datetime)
         self.reference_datetime = datetime(2000,1,1)
         self.timepoints_secs = ((self.timepoints-self.reference_datetime).astype('timedelta64[ms]')/1000).astype(int)
         self.dist2time = 1 # Factor to get travel time from distance in s/m (Avg. trip duration/Avg. dist)
         self.dist2reve = 0.00001  # Factor to get revenue from distance
-        self.rcr = 3 # Cost of making a move (Ratio of revenue to cost for moves)
+        self.rcr = cost # Cost of making a move
         self.r2t = 0.125 # Fraction of requests that turn to trips
         self.max_dist = 5000 # Maximum distance from request to area (walking distance)
         self.max_cars = 1000 # Max cars per area
@@ -108,7 +105,8 @@ class Sim():
 
     def move_car(self, origin, dest, model=None):
         c = self.areas[origin].depart(self, self.areas[dest], self.timepoints_secs[self.i], model=model)
-        self.revenue += -c/self.rcr
+        self.revenue += -c*self.rcr
+        return -c*self.rcr
 
     def dr2a(self, row): # Distance from request to area
         _,_,dists = wgs84_geod.inv(
@@ -173,16 +171,17 @@ class Area(): # Contains area properties and states. Used in simulator
         return np.where(self.cars[:,0]<=time)[0]
 
 class Agent():
-    def __init__(self, replay_buffer:ReplayBuffer, time_step=timedelta(minutes=30), time_start=datetime(2020, 2, 2, 0, 0, 0), time_end=datetime(2021, 5, 3, 23, 59, 59), save_step=True):
+    def __init__(self, replay_buffer:ReplayBuffer, time_step=timedelta(minutes=30), time_start=datetime(2020, 2, 2, 0, 0, 0), time_end=datetime(2021, 5, 3, 23, 59, 59), cost=1, save_step=True):
         self.save = save_step
         self.time_step = time_step
         self.time_start = time_start
         self.time_end = time_end
         self.replay_buffer = replay_buffer
+        self.cost = cost
         self.reset()
 
     def reset(self):
-        self.sim = Sim(time_step=self.time_step, time_start=self.time_start, time_end=self.time_end)
+        self.sim = Sim(time_step=self.time_step, time_start=self.time_start, time_end=self.time_end, cost=self.cost)
         self.state, _ = self.sim.get_state()
 
     def get_action(self, net:nn.Module, epsilon:float, device):
@@ -198,13 +197,13 @@ class Agent():
 
     @torch.no_grad()
     def play_step(self, net: nn.Module, epsilon: float = 0.0, device: str = "cpu"):
-        
+        reward = 0       
         actions = self.get_action(net, epsilon, device)
 
         for origin, destination in enumerate(actions):
-            self.sim.move_car(origin, destination)
+            reward += self.sim.move_car(origin, destination)
 
-        reward = self.sim.step()
+        reward += self.sim.step()
 
         new_state, done = self.sim.get_state()
 

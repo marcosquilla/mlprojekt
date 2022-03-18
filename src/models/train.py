@@ -12,11 +12,6 @@ from src.models.models import BC_Area_s1, BC_Area_s2, BCLSTM_Area_s1, DQN, CQN
 from src.data.datamodules import AreaDataModule
 import warnings
 pd.options.mode.chained_assignment = None
-#warnings.filterwarnings('error')
-
-# TODO: Time_window vs time_delta tuning. Data download.
-# https://towardsdatascience.com/building-a-neural-network-on-amazon-sagemaker-with-pytorch-lightning-63730ec740ea
-# https://pytorch-lightning-bolts.readthedocs.io/en/latest/reinforce_learn.html
 
 def get_ckpt_path(args, stage):
     if args.load_version is not None:
@@ -70,7 +65,7 @@ def setup_model_dm(args, s, ckpt=None):
             lr=args.lr, l2=args.l2, gamma=args.gamma, sync_rate=args.sync_rate, buffer_capacity=args.buffer_capacity, 
             warm_up=args.warm_up, sample_size=args.sample_size, batch_size=args.batch_size, num_workers=args.num_workers,
             eps_stop=args.eps_stop, eps_start=args.eps_start, eps_end=args.eps_end, double_dqn=args.ddqn, normalise_reward=args.scale_r,
-            time_step=timedelta(minutes=args.time_step), 
+            time_step=timedelta(minutes=args.time_step), cost=args.cost, 
             #time_end=datetime(2020,2,5,16,0,0))
             time_end=datetime(args.year_end, args.month_end, 1, 0, 0, 0))
     elif s == 'cqn':
@@ -82,7 +77,7 @@ def setup_model_dm(args, s, ckpt=None):
             hidden_layers=(30*in_size, int(15*in_size+5*out_size), 10*out_size), buffer_code=args.buffer_code,
             lr=args.lr, l2=args.l2, gamma=args.gamma, sync_rate=args.sync_rate, buffer_capacity=args.buffer_capacity, 
             warm_up=args.warm_up, sample_size=args.sample_size, batch_size=args.batch_size, num_workers=args.num_workers,
-            eps_stop=args.eps_stop, eps_start=args.eps_start, eps_end=args.eps_end, normalise_reward=args.scale_r)
+            eps_stop=args.eps_stop, eps_start=args.eps_start, eps_end=args.eps_end, normalise_reward=args.scale_r, cost=args.cost)
     return model, dm
 
 def run_stage(args, stage):
@@ -155,6 +150,7 @@ if __name__ == "__main__":
     parser.add_argument('--year_end', default=2021, type=int, help='Time_end year')
     parser.add_argument('--month_end', default=5, type=int, help='Time_end month')
     parser.add_argument('--time_step', default=30, type=int, help='Time step in minutes')
+    parser.add_argument('--cost', default=1, type=float, help='Making a move costs revenue*--cost')
     parser.add_argument('--buffer_code', default=20206, type=str, help='Buffer to use in offline DQN')
     args = parser.parse_args()
     warnings.filterwarnings(action="ignore", category=pl.utilities.warnings.LightningDeprecationWarning)
