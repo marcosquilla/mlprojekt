@@ -185,7 +185,7 @@ class DQN(pl.LightningModule):
         self, in_out, hidden_layers, buffer_capacity=1000000, warm_up=21936, sample_size=21936, batch_size=32,
         num_workers=0, lr=1e-3, l2=1e-8, gamma=0.999, sync_rate=10, eps_stop=1000, eps_start=1.0, eps_end=0.01, 
         time_step=timedelta(minutes=30), time_start=datetime(2020, 2, 2, 0, 0, 0),time_end=datetime(2021, 5, 1, 0, 0, 0),
-        double_dqn=True, normalise_reward=True):
+        cost=1, double_dqn=True, normalise_reward=True):
         super().__init__()
 
         self.save_hyperparameters()
@@ -245,7 +245,7 @@ class DQN(pl.LightningModule):
 
         if self.global_step % self.hparams.sync_rate == 0:
             self.target.load_state_dict(self.Q.state_dict())
-            with open(str(Path('.') / 'data' / 'processed' / f'buffer{self.hparams.time_end.year}{self.hparams.time_end.month}.pkl'), 'wb') as f:
+            with open(str(Path('.') / 'data' / 'processed' / f'buffer{self.hparams.time_end.year}{self.hparams.time_end.month}_{self.hparams.cost}.pkl'), 'wb') as f:
                     pickle.dump(self.buffer, f)
 
         status = {
@@ -266,18 +266,18 @@ class DQN(pl.LightningModule):
         return DataLoader(train_data, batch_size=self.hparams.batch_size, num_workers=self.hparams.num_workers)
 
     def create_buffer_agent(self):
-        if not (Path('.') / 'data' / 'processed' / f'buffer{self.hparams.time_end.year}{self.hparams.time_end.month}.pkl').is_file():
+        if not (Path('.') / 'data' / 'processed' / f'buffer{self.hparams.time_end.year}{self.hparams.time_end.month}_{self.hparams.cost}.pkl').is_file():
             buffer = ReplayBuffer(self.hparams.buffer_capacity)
-            agent = Agent(buffer, time_step=self.hparams.time_step, time_start=self.hparams.time_start, time_end=self.hparams.time_end)
+            agent = Agent(buffer, time_step=self.hparams.time_step, time_start=self.hparams.time_start, time_end=self.hparams.time_end, cost=self.hparams.cost)
             print('Populating buffer')
             for _ in tqdm(range(self.hparams.warm_up), smoothing=0.1):
                 agent.play_step(net=None, epsilon=1.0)
-            with open(str(Path('.') / 'data' / 'processed' / f'buffer{self.hparams.time_end.year}{self.hparams.time_end.month}.pkl'), 'wb') as f:
+            with open(str(Path('.') / 'data' / 'processed' / f'buffer{self.hparams.time_end.year}{self.hparams.time_end.month}_{self.hparams.cost}.pkl'), 'wb') as f:
                     pickle.dump(buffer, f)
         else:
-            with open(str(Path('.') / 'data' / 'processed' / f'buffer{self.hparams.time_end.year}{self.hparams.time_end.month}.pkl'), 'rb') as f:
+            with open(str(Path('.') / 'data' / 'processed' / f'buffer{self.hparams.time_end.year}{self.hparams.time_end.month}_{self.hparams.cost}.pkl'), 'rb') as f:
                 buffer = pickle.load(f)
-            agent = Agent(buffer, time_step=self.hparams.time_step, time_start=self.hparams.time_start, time_end=self.hparams.time_end)
+            agent = Agent(buffer, time_step=self.hparams.time_step, time_start=self.hparams.time_start, time_end=self.hparams.time_end, cost=self.hparams.cost)
         self.buffer, self.agent = buffer, agent
 
 class CQN(pl.LightningModule):
@@ -285,7 +285,7 @@ class CQN(pl.LightningModule):
         self, in_out, hidden_layers, buffer_code, buffer_capacity=1000000, warm_up=21936, sample_size=21936, batch_size=32,
         num_workers=0, lr=1e-3, l2=1e-8, gamma=0.999, sync_rate=10, eps_stop=1000, eps_start=1.0, eps_end=0.01, 
         time_step=timedelta(minutes=30), time_start=datetime(2021, 1, 1, 0, 0, 0),time_end=datetime(2021, 5, 3, 23, 59, 59),
-        normalise_reward=True):
+        cost=1, normalise_reward=True):
         super().__init__()
 
         self.save_hyperparameters()
@@ -362,5 +362,5 @@ class CQN(pl.LightningModule):
     def get_buffer(self):
         with open(str(Path('.') / 'data' / 'processed' / f'buffer{self.hparams.buffer_code}.pkl'), 'rb') as f:
                 buffer = pickle.load(f)
-        agent = Agent(buffer, time_step=self.hparams.time_step, time_start=self.hparams.time_start, time_end=self.hparams.time_end, save_step=False)
+        agent = Agent(buffer, time_step=self.hparams.time_step, time_start=self.hparams.time_start, time_end=self.hparams.time_end, cost=1, save_step=False)
         self.buffer, self.agent = buffer, agent
