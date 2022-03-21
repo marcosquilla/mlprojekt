@@ -29,50 +29,48 @@ def get_ckpt_path(args):
 
 def run_hist(args, sim):
     actions = pd.read_csv((Path('.') / 'data' / 'processed' / 'actions.csv'), parse_dates=['Time'])
-    pd.DataFrame([]).to_csv(f'reports/{args.set}/scores_{args.cost}/sim_hist_rev.csv', index=False, header=False)
-    for _ in tqdm(range(args.runs)):
-        sim.step()
+    
+    _, d = sim.step()
+    if args.save_buffer:
+        buffer = ReplayBuffer(10000000)
+    while not d:
+        state, _ = sim.get_state()
+        for _, action in actions[actions['Time']==sim.timepoints[sim.i]].iterrows(): # Perform historical moves
+            sim.move_car(
+                action['Virtual_Start_Zone_Name'],
+                action['Virtual_Zone_Name'],
+                action[action==1].index[action[action==1].index.str.contains('Vehicle')][0][14:])
+        reward, d = sim.step()
+        
         if args.save_buffer:
-            buffer = ReplayBuffer(10000000)
-        for _, t in enumerate(tqdm(sim.timepoints[:-2], leave=False)):
-            state, _ = sim.get_state()
-            for _, action in actions[actions['Time']==t].iterrows(): # Perform historical moves
-                sim.move_car(
-                    action['Virtual_Start_Zone_Name'],
-                    action['Virtual_Zone_Name'],
-                    action[action==1].index[action[action==1].index.str.contains('Vehicle')][0][14:])
-            reward = sim.step()
-            
-            if args.save_buffer:
-                new_state, done = sim.get_state()
-                for i, s in enumerate(state): # Perform historical moves
-                    action = actions[(actions['Time']==t) & (actions['Virtual_Start_Zone_Name']==i)]
-                    if len(action)==0: # No action for time and origin area found
-                        action = i
-                    else:
-                        action = action['Virtual_Zone_Name'].values.tolist()[0]
-                    buffer.append(
-                        (s.cpu().detach().numpy(), 
-                        action, 
-                        reward, 
-                        done, 
-                        new_state[i].cpu().detach().numpy()))
-        if args.save_buffer:
-            with open(str(Path('.') / 'data' / 'processed' / f'bufferhist.pkl'), 'wb') as f:
-                pickle.dump(buffer, f)
+            new_state, done = sim.get_state()
+            for i, s in enumerate(state): # Perform historical moves
+                action = actions[(actions['Time']==sim.timepoints[sim.i]) & (actions['Virtual_Start_Zone_Name']==i)]
+                if len(action)==0: # No action for time and origin area found
+                    action = i
+                else:
+                    action = action['Virtual_Zone_Name'].values.tolist()[0]
+                buffer.append(
+                    (s.cpu().detach().numpy(), 
+                    action, 
+                    reward, 
+                    done, 
+                    new_state[i].cpu().detach().numpy()))
+    if args.save_buffer:
+        with open(str(Path('.') / 'data' / 'processed' / f'bufferhist.pkl'), 'wb') as f:
+            pickle.dump(buffer, f)
 
-        pd.DataFrame([sim.get_revenue()]).to_csv(f'reports/{args.set}/scores_{args.cost}/sim_hist_rev.csv', index=False, header=False, mode='a')
+    pd.DataFrame([sim.get_revenue()]).to_csv(f'reports/{args.set}/scores_{args.cost}/sim_hist_rev.csv', index=False, header=False, mode='a')
 
 def run_single_moves(args, sim):
-    pd.DataFrame([]).to_csv(f'reports/{args.set}/scores_{args.cost}/sim_{args.steps}_me.csv', index=False, header=False)
-    for _ in tqdm(range(args.runs)):
-        for i, _ in enumerate(tqdm(sim.timepoints[:-1], leave=False)):
-            sim.step()
-            if i % args.steps == 0:
-                sim.move_car(
-                    np.random.randint(0, len(sim.areas), 1).tolist()[0], 
-                    3) # Moves 1 random car to area 3
-        pd.DataFrame([sim.get_revenue()]).to_csv(f'reports/{args.set}/scores_{args.cost}/sim_{args.steps}_me.csv', index=False, header=False, mode='a')
+    d = False
+    while not d:
+        _, d = sim.step()
+        if sim.i % args.steps == 0:
+            sim.move_car(
+                np.random.randint(0, len(sim.areas), 1).tolist()[0], 
+                3) # Moves 1 random car to area 3
+    pd.DataFrame([sim.get_revenue()]).to_csv(f'reports/{args.set}/scores_{args.cost}/sim_{args.steps}_me.csv', index=False, header=False, mode='a')
 
 def run_bc(args, sim):
     path_s1, path_s2 = get_ckpt_path(args)
@@ -81,19 +79,17 @@ def run_bc(args, sim):
     stage_2 = BC_Area_s2.load_from_checkpoint(path_s2).to(device)
     stage_1.eval()
     stage_2.eval()
-
-    pd.DataFrame([]).to_csv(f'reports/{args.set}/scores_{args.cost}/sim_{args.stage_1_version}{args.stage_2_version}_bc.csv', index=False, header=False)    
-    for _ in tqdm(range(args.runs)):
-        for _ in tqdm(sim.timepoints[:-1], leave=False):
-            sim.step()
-            s, _ = sim.get_state()
-            s = s.to(device)
-            to_move = torch.where(stage_1(s).squeeze()>0)[0]
-            if len(to_move)>0:
-                dest = torch.argmax(stage_2(s[to_move]), dim=1)
-                for j, a in enumerate(to_move):
-                    sim.move_car(a.item(), dest[j].item())
-        pd.DataFrame([sim.get_revenue()]).to_csv(f'reports/{args.set}/scores_{args.cost}/sim_{args.stage_1_version}{args.stage_2_version}_bc.csv', index=False, header=False, mode='a')
+    d = False
+    while not d:
+        _, d = sim.step()
+        s, _ = sim.get_state()
+        s = s.to(device)
+        to_move = torch.where(stage_1(s).squeeze()>0)[0]
+        if len(to_move)>0:
+            dest = torch.argmax(stage_2(s[to_move]), dim=1)
+            for j, a in enumerate(to_move):
+                sim.move_car(a.item(), dest[j].item())
+    pd.DataFrame([sim.get_revenue()]).to_csv(f'reports/{args.set}/scores_{args.cost}/sim_{args.stage_1_version}{args.stage_2_version}_bc.csv', index=False, header=False, mode='a')
 
 def run_rl(args, sim):
     path = get_ckpt_path(args)
@@ -105,27 +101,25 @@ def run_rl(args, sim):
         dqn = CQN.load_from_checkpoint(path).to(device)
         suf = 'cqn'
     dqn.eval()
+    d = False
 
-    pd.DataFrame([]).to_csv(f'reports/{args.set}/scores_{args.cost}/sim_{args.rl_version}_{suf}.csv', index=False, header=False)
-    
-    for _ in tqdm(range(args.runs)):
-        #sim = Sim(time_step=timedelta(minutes=60), time_end=datetime(2020, 2, 5, 16, 00, 00))
-        td = []
-        for _ in tqdm(sim.timepoints[:-1], leave=False):
-            #print(f"Step {sim.i}")
-            #print([c.total_cars() for c in sim.areas])
-            sim.step()
-            s, _ = sim.get_state()
-            s = s.to(device)
-            _, dests = torch.max(dqn(s), dim=1)
-            if args.save_moves:
-                td.append(dests.cpu().detach().numpy().tolist())
-            #print("Moves")
-            for a, dest in enumerate(dests):
-                sim.move_car(a, dest.item())
-        pd.DataFrame([sim.get_revenue()]).to_csv(f'reports/{args.set}/scores_{args.cost}/sim_{args.rl_version}_{suf}.csv', index=False, header=False, mode='a')
+    #sim = Sim(time_step=timedelta(minutes=60), time_end=datetime(2020, 2, 5, 16, 00, 00))
+    td = []
+    while not d:
+        #print(f"Step {sim.i}")
+        #print([c.total_cars() for c in sim.areas])
+        _, d = sim.step()
+        s, _ = sim.get_state()
+        s = s.to(device)
+        _, dests = torch.max(dqn(s), dim=1)
         if args.save_moves:
-            pd.DataFrame(td).to_csv(f'reports/{args.set}/moves/td_{args.rl_version}_{suf}.csv', index=False, header=False, mode='a')
+            td.append(dests.cpu().detach().numpy().tolist())
+        #print("Moves")
+        for a, dest in enumerate(dests):
+            sim.move_car(a, dest.item())
+    pd.DataFrame([sim.get_revenue()]).to_csv(f'reports/{args.set}/scores_{args.cost}/sim_{args.rl_version}_{suf}.csv', index=False, header=False, mode='a')
+    if args.save_moves:
+        pd.DataFrame(td).to_csv(f'reports/{args.set}/moves/td_{args.rl_version}_{suf}.csv', index=False, header=False, mode='a')
 
 def cost_experiment(args):
     if args.cexp:
@@ -139,20 +133,22 @@ def cost_experiment(args):
         args.bc, args.dqn, args.cqn, args.cexpg = True, False, False, False
         main(args)
         args.bc = False
-        for rl_version in range(7):
+        for rl_version in range(4,7):
             args.rl_version = rl_version
             args.dqn, args.cqn = True, False 
             main(args)
             args.dqn, args.cqn = False, True        
             main(args)
 
+        args.rl_version += 1
+        main(args) # Run last cqn version (hist)
+
 def main(args):
+    assert args.set=='train' or args.set=='test', '--set must be train or test'
     if args.set=='train':
         sim = Sim(time_end=datetime(2020,6,1,0,0,0), cost=args.cost)
-    elif args.set=='test':
-        sim = Sim(time_start=datetime(2020,6,1,0,0,0), cost=args.cost)
     else:
-        print('--set must be train or test')
+        sim = Sim(time_start=datetime(2020,6,1,0,0,0), cost=args.cost)
 
     if args.hist:
         run_hist(args, sim)
@@ -186,4 +182,5 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     os.makedirs(os.path.dirname(f'reports/{args.set}/scores_{args.cost}/'), exist_ok=True)
-    main(args)
+    for _ in tqdm(range(args.runs)):
+        main(args)
