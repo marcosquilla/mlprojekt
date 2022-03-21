@@ -9,6 +9,7 @@ from pyproj import Geod
 from src.data.datasets import ReplayBuffer
 wgs84_geod = Geod(ellps='WGS84') # Distance will be measured in meters on this ellipsoid - more accurate than a spherical method
 
+# Rename cqn versions. Test new version on all costs and sets
 
 class Sim():
     def __init__(self, time_step:timedelta=timedelta(minutes=30), time_start=datetime(2020, 2, 2, 0, 0, 0), time_end=datetime(2021, 5, 3, 23, 59, 59), cost=1):
@@ -73,10 +74,9 @@ class Sim():
                         request[1]) 
             self.revenue += r
             self.i += 1
-            return r
+            return r, False
         except IndexError:
-            print("Simulation period ended!")
-            pass
+            return 0, True
 
     def get_revenue(self):
         return self.revenue
@@ -203,7 +203,8 @@ class Agent():
         for origin, destination in enumerate(actions):
             reward += self.sim.move_car(origin, destination)
 
-        reward += self.sim.step()
+        r, _ = self.sim.step()
+        reward += r
 
         new_state, done = self.sim.get_state()
 
