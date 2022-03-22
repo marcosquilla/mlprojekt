@@ -144,7 +144,6 @@ def cost_experiment(args):
         main(args) # Run last cqn version (hist)
 
 def main(args):
-    assert args.set=='train' or args.set=='test', '--set must be train or test'
     if args.set=='train':
         sim = Sim(time_end=datetime(2020,6,1,0,0,0), cost=args.cost)
     else:
@@ -181,6 +180,7 @@ if __name__ == "__main__":
     parser.add_argument('--set', default='test', type=str, help='Period to use: train or test')
     args = parser.parse_args()
 
+    assert args.set=='train' or args.set=='test', '--set must be train or test'
     os.makedirs(os.path.dirname(f'reports/{args.set}/scores_{args.cost}/'), exist_ok=True)
     for _ in tqdm(range(args.runs)):
         main(args)
