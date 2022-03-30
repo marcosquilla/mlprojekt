@@ -122,3 +122,6 @@ bin/
 # CSV and optimisation files
 *.csv
 /reports/profiles/
+
+# Pseudocode
+*.pseudo
