@@ -57,7 +57,7 @@ def setup_model_dm(args, s, ckpt=None):
                 model = BC_Area_s2.load_from_checkpoint(ckpt)
     elif s == 'dqn':
         in_size = int(7+24+len(cars)+3*len(area_centers)) # Date, car models and location (current), amount of cars in all zones, and demand
-        out_size = len(area_centers)
+        out_size = len(area_centers)+1 # +1 for no movement area
         dm = None
         model = DQN(
             in_out=(in_size, out_size),
@@ -70,7 +70,7 @@ def setup_model_dm(args, s, ckpt=None):
             time_end=datetime(args.year_end, args.month_end, 1, 0, 0, 0))
     elif s == 'cqn':
         in_size = int(7+24+len(cars)+3*len(area_centers)) # Date, car models and location (current), amount of cars in all zones, and demand
-        out_size = len(area_centers)
+        out_size = len(area_centers)+1 # +1 for no movement area
         dm = None
         model = CQN(
             in_out=(in_size, out_size),
@@ -148,7 +148,7 @@ if __name__ == "__main__":
     parser.add_argument('--sync_rate', default=1000, type=int, help='Sync Q and target network every --sync_rate steps')
     parser.add_argument('--n_zones', default=20, type=int, help='Number of zones when rebuilding dataset')
     parser.add_argument('--year_end', default=2021, type=int, help='Time_end year')
-    parser.add_argument('--month_end', default=5, type=int, help='Time_end month')
+    parser.add_argument('--month_end', default=1, type=int, help='Time_end month')
     parser.add_argument('--time_step', default=30, type=int, help='Time step in minutes')
     parser.add_argument('--cost', default=1, type=float, help='Making a move costs revenue*--cost')
     parser.add_argument('--buffer_code', default=20206, type=str, help='Buffer to use in offline DQN')

@@ -2,7 +2,7 @@ import os
 from argparse import ArgumentParser
 from pathlib import Path
 import pickle
-import glob
+from glob import glob
 from tqdm import tqdm
 import numpy as np
 import pandas as pd
@@ -18,14 +18,14 @@ from datetime import timedelta, datetime
 def get_ckpt_path(args):
     if args.dqn:
         ckpt_path = (Path('.') / 'models' / "dqn" / 'lightning_logs' / str('version_' + str(args.rl_version)) / 'checkpoints' / '*.ckpt')
-        return Path('.') / max(glob.glob(str(ckpt_path)), key=os.path.getmtime)
+        return Path('.') / max(glob(str(ckpt_path)), key=os.path.getmtime)
     elif args.cqn:
         ckpt_path = (Path('.') / 'models' / "cqn" / 'lightning_logs' / str('version_' + str(args.rl_version)) / 'checkpoints' / '*.ckpt')
-        return Path('.') / max(glob.glob(str(ckpt_path)), key=os.path.getmtime)
+        return Path('.') / max(glob(str(ckpt_path)), key=os.path.getmtime)
     else:
         ckpt_path_s1 = (Path('.') / 'models' / "stage_1" / 'lightning_logs' / str('version_' + str(args.stage_1_version)) / 'checkpoints' / '*.ckpt')
         ckpt_path_s2 = (Path('.') / 'models' / "stage_2" / 'lightning_logs' / str('version_' + str(args.stage_2_version)) / 'checkpoints' / '*.ckpt')
-        return Path('.') / max(glob.glob(str(ckpt_path_s1)), key=os.path.getmtime), Path('.') / max(glob.glob(str(ckpt_path_s2)), key=os.path.getmtime)
+        return Path('.') / max(glob(str(ckpt_path_s1)), key=os.path.getmtime), Path('.') / max(glob(str(ckpt_path_s2)), key=os.path.getmtime)
 
 def run_hist(args, sim):
     actions = pd.read_csv((Path('.') / 'data' / 'processed' / 'actions.csv'), parse_dates=['Time'])
@@ -47,7 +47,7 @@ def run_hist(args, sim):
             for i, s in enumerate(state): # Perform historical moves
                 action = actions[(actions['Time']==sim.timepoints[sim.i]) & (actions['Virtual_Start_Zone_Name']==i)]
                 if len(action)==0: # No action for time and origin area found
-                    action = i
+                    action = len(sim.areas) # i if no ghost area, len(sim.areas) with ghost area
                 else:
                     action = action['Virtual_Zone_Name'].values.tolist()[0]
                 buffer.append(
@@ -119,7 +119,7 @@ def run_rl(args, sim):
             sim.move_car(a, dest.item())
     pd.DataFrame([sim.get_revenue()]).to_csv(f'reports/{args.set}/scores_{args.cost}/sim_{args.rl_version}_{suf}.csv', index=False, header=False, mode='a')
     if args.save_moves:
-        pd.DataFrame(td).to_csv(f'reports/{args.set}/moves/td_{args.rl_version}_{suf}.csv', index=False, header=False, mode='a')
+        pd.DataFrame(td).to_csv(f'reports/{args.set}/moves_{args.cost}/td_{args.rl_version}_{suf}.csv', index=False, header=False)
 
 def cost_experiment(args):
     if args.cexp:
@@ -129,25 +129,23 @@ def cost_experiment(args):
         for sp in range(8):
             args.steps = 2**sp
             main(args)
+        args.hist, args.single, args.cexp = False, False, True
     else:
         args.bc, args.dqn, args.cqn, args.cexpg = True, False, False, False
         main(args)
         args.bc = False
-        for rl_version in range(4,7):
+        for rl_version in range(len(glob(str(Path.cwd() / 'models' / 'cqn' / 'lightning_logs/*/') , recursive=True))-1):
             args.rl_version = rl_version
             args.dqn, args.cqn = True, False 
             main(args)
             args.dqn, args.cqn = False, True        
             main(args)
-
         args.rl_version += 1
         main(args) # Run last cqn version (hist)
+        args.bc, args.dqn, args.cqn, args.cexpg = False, False, False, True
 
 def main(args):
-    if args.set=='train':
-        sim = Sim(time_end=datetime(2020,6,1,0,0,0), cost=args.cost)
-    else:
-        sim = Sim(time_start=datetime(2020,6,1,0,0,0), cost=args.cost)
+    sim = Sim(time_end=datetime(2021,1,1,0,0,0), cost=args.cost) if args.set=='train' else Sim(time_start=datetime(2021,1,1,0,0,0), cost=args.cost)
 
     if args.hist:
         run_hist(args, sim)
@@ -177,10 +175,11 @@ if __name__ == "__main__":
     parser.add_argument('--cost', default=1, type=float, help='Making a move costs revenue*--cost')
     parser.add_argument('--cexp', action='store_true', help='Run experiment with fixed cost without DL models')
     parser.add_argument('--cexpg', action='store_true', help='Run experiment with fixed cost of DL models')
-    parser.add_argument('--set', default='test', type=str, help='Period to use: train or test')
+    parser.add_argument('--set', default='test', type=str, help='Period to test on: train or test')
     args = parser.parse_args()
 
     assert args.set=='train' or args.set=='test', '--set must be train or test'
     os.makedirs(os.path.dirname(f'reports/{args.set}/scores_{args.cost}/'), exist_ok=True)
+    os.makedirs(os.path.dirname(f'reports/{args.set}/moves_{args.cost}/'), exist_ok=True)
     for _ in tqdm(range(args.runs)):
         main(args)

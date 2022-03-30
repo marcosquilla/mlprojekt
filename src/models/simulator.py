@@ -54,6 +54,32 @@ class Sim():
         
         self.demand = self.requests[(self.requests['Created_Datetime_Local']>=self.timepoints_secs[0]) & (self.requests['Created_Datetime_Local']<self.timepoints_secs[1])]
 
+    def dr2a(self, row): # Distance from request to area
+        _,_,dists = wgs84_geod.inv(
+                self.area_centers['GPS_Longitude'], self.area_centers['GPS_Latitude'],
+                np.full(len(self.area_centers),row['GPS_Longitude']), np.full(len(self.area_centers),row['GPS_Latitude']))
+        ca = np.argmin(dists)
+        row['Area'] = ca
+        row['Distance'] = dists[ca]
+        return row
+
+    def open2dem(self, dem, area_centers):
+        if len(dem) == 0:
+            dem = pd.Series(data=0, index=np.arange(len(area_centers)))
+            return dem
+        else:
+            dem.loc[:,area_centers.index.values] = 0 # Create columns with area names
+            dem.loc[:,area_centers.index.values] = dem.apply(self.coords_to_areas, axis=1) # Apply function to all openings
+            dem = dem.loc[:,area_centers.index].sum(axis=0) # Aggregate demand in the time window over areas (.loc to remove gps coords and platform). Sum of demand equals to amount of app openings
+            return dem
+
+    def coords_to_areas(self, target):
+        # Auxiliary method for demand. Calculate to which area an opening's coordinates (target) "belong to".
+        _,_,dists = wgs84_geod.inv(
+            self.area_centers['GPS_Longitude'], self.area_centers['GPS_Latitude'],
+            np.full(len(self.area_centers),target['GPS_Longitude']), np.full(len(self.area_centers),target['GPS_Latitude']))
+        return pd.Series(1 - dists / sum(dists)) / (len(dists) - 1) # Percentage of how much an opening belongs to each area
+
     def step(self): # idx only to get statistical data
         try:
             self.demand = self.requests.loc[(self.requests['Created_Datetime_Local']>=self.timepoints_secs[self.i]) & (self.requests['Created_Datetime_Local']<self.timepoints_secs[self.i+1])].copy()
@@ -97,42 +123,19 @@ class Sim():
             torch.tensor([len(a.available_cars(self.timepoints_secs[self.i])) for a in self.areas])] # Constant dimensions in step
 
         s = torch.stack([torch.hstack([*cs,
-            torch.tensor([len(locs[(locs[:,0]==str(area.name)) & (locs[:,1]==vm)]) for vm in self.vmodels]),
-            torch.tensor([a.name==area.name for a in self.areas], dtype=int)]) for area in self.areas])
+            torch.tensor([len(locs[(locs[:,0]==str(area.name)) & (locs[:,1]==vm)]) for vm in self.vmodels]), # Number of each car model in each area
+            torch.tensor([a.name==area.name for a in self.areas], dtype=int)]) for area in self.areas]) # One-hot encode of area identity
         
         d = len(self.timepoints_secs)-2<=self.i
         return s, d
 
     def move_car(self, origin, dest, model=None):
-        c = self.areas[origin].depart(self, self.areas[dest], self.timepoints_secs[self.i], model=model)
+        if dest<len(self.areas):
+            c = self.areas[origin].depart(self, self.areas[dest], self.timepoints_secs[self.i], model=model)
+        else:
+            c = 0
         self.revenue += -c*self.rcr
         return -c*self.rcr
-
-    def dr2a(self, row): # Distance from request to area
-        _,_,dists = wgs84_geod.inv(
-                self.area_centers['GPS_Longitude'], self.area_centers['GPS_Latitude'],
-                np.full(len(self.area_centers),row['GPS_Longitude']), np.full(len(self.area_centers),row['GPS_Latitude']))
-        ca = np.argmin(dists)
-        row['Area'] = ca
-        row['Distance'] = dists[ca]
-        return row
-
-    def open2dem(self, dem, area_centers):
-        if len(dem) == 0:
-            dem = pd.Series(data=0, index=np.arange(len(area_centers)))
-            return dem
-        else:
-            dem.loc[:,area_centers.index.values] = 0 # Create columns with area names
-            dem.loc[:,area_centers.index.values] = dem.apply(self.coords_to_areas, axis=1) # Apply function to all openings
-            dem = dem.loc[:,area_centers.index].sum(axis=0) # Aggregate demand in the time window over areas (.loc to remove gps coords and platform). Sum of demand equals to amount of app openings
-            return dem
-
-    def coords_to_areas(self, target):
-        # Auxiliary method for demand. Calculate to which area an opening's coordinates (target) "belong to".
-        _,_,dists = wgs84_geod.inv(
-            self.area_centers['GPS_Longitude'], self.area_centers['GPS_Latitude'],
-            np.full(len(self.area_centers),target['GPS_Longitude']), np.full(len(self.area_centers),target['GPS_Latitude']))
-        return pd.Series(1 - dists / sum(dists)) / (len(dists) - 1) # Percentage of how much an opening belongs to each area
 
 class Area(): # Contains area properties and states. Used in simulator
     def __init__(self, location, cars:np.array, max_cars:int, name):
