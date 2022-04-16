@@ -180,7 +180,7 @@ class Q(nn.Module):
     def forward(self, x):
         return self.layers_hidden(x.float())
 
-class DQN(pl.LightningModule):
+class DQN(pl.LightningModule): # Taken from https://pytorch-lightning-bolts.readthedocs.io/en/latest/reinforce_learn.html
     def __init__(
         self, in_out, hidden_layers, buffer_capacity=1000000, warm_up=21936, sample_size=21936, batch_size=32,
         num_workers=0, lr=1e-3, l2=1e-8, gamma=0.999, sync_rate=10, eps_stop=1000, eps_start=1.0, eps_end=0.01, 
@@ -280,7 +280,7 @@ class DQN(pl.LightningModule):
             agent = Agent(buffer, time_step=self.hparams.time_step, time_start=self.hparams.time_start, time_end=self.hparams.time_end, cost=self.hparams.cost)
         self.buffer, self.agent = buffer, agent
 
-class CQN(pl.LightningModule):
+class CQN(pl.LightningModule): # Taken from https://github.com/BY571/CQL
     def __init__(
         self, in_out, hidden_layers, buffer_code, buffer_capacity=1000000, warm_up=21936, sample_size=21936, batch_size=32,
         num_workers=0, lr=1e-3, l2=1e-8, gamma=0.999, sync_rate=10, eps_stop=1000, eps_start=1.0, eps_end=0.01, 
