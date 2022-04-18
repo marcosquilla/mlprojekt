@@ -285,7 +285,7 @@ class CQN(pl.LightningModule): # Taken from https://github.com/BY571/CQL
         self, in_out, hidden_layers, buffer_code, buffer_capacity=1000000, warm_up=21936, sample_size=21936, batch_size=32,
         num_workers=0, lr=1e-3, l2=1e-8, gamma=0.999, sync_rate=10, eps_stop=1000, eps_start=1.0, eps_end=0.01, 
         time_step=timedelta(minutes=30), time_start=datetime(2021, 1, 1, 0, 0, 0),time_end=datetime(2021, 5, 3, 23, 59, 59),
-        cost=1, normalise_reward=True):
+        cost=1, normalise_reward=True, double_dqn=False):
         super().__init__()
 
         self.save_hyperparameters()
@@ -309,7 +309,14 @@ class CQN(pl.LightningModule): # Taken from https://github.com/BY571/CQL
         state_action_values = Q_a_s.gather(1, actions.unsqueeze(-1)).squeeze(-1)
 
         with torch.no_grad():
-            next_state_values = self.target(next_states).max(1)[0]
+            if self.hparams.double_dqn:
+                next_outputs = self.Q(next_states)
+                next_state_acts = next_outputs.max(1)[1].unsqueeze(-1)  # Take action at the index with the highest value
+                next_tgt_out = self.target(next_states)
+                # Take the value of the action chosen by the train network
+                next_state_values = next_tgt_out.gather(1, next_state_acts).squeeze(-1)
+            else:
+                next_state_values = self.target(next_states).max(1)[0]
 
         next_state_values[dones] = 0.0
         next_state_values = next_state_values.detach()

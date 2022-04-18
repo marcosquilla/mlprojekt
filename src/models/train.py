@@ -64,7 +64,7 @@ def setup_model_dm(args, s, ckpt=None):
             hidden_layers=(30*in_size, int(15*in_size+5*out_size), 10*out_size),
             lr=args.lr, l2=args.l2, gamma=args.gamma, sync_rate=args.sync_rate, buffer_capacity=args.buffer_capacity, 
             warm_up=args.warm_up, sample_size=args.sample_size, batch_size=args.batch_size, num_workers=args.num_workers,
-            eps_stop=args.eps_stop, eps_start=args.eps_start, eps_end=args.eps_end, double_dqn=args.ddqn, normalise_reward=args.scale_r,
+            eps_stop=args.eps_stop, eps_start=args.eps_start, eps_end=args.eps_end, double_dqn=args.double, normalise_reward=args.scale_r,
             time_step=timedelta(minutes=args.time_step), cost=args.cost, 
             #time_end=datetime(2020,2,5,16,0,0))
             time_end=datetime(args.year_end, args.month_end, 1, 0, 0, 0))
@@ -77,7 +77,7 @@ def setup_model_dm(args, s, ckpt=None):
             hidden_layers=(30*in_size, int(15*in_size+5*out_size), 10*out_size), buffer_code=args.buffer_code,
             lr=args.lr, l2=args.l2, gamma=args.gamma, sync_rate=args.sync_rate, buffer_capacity=args.buffer_capacity, 
             warm_up=args.warm_up, sample_size=args.sample_size, batch_size=args.batch_size, num_workers=args.num_workers,
-            eps_stop=args.eps_stop, eps_start=args.eps_start, eps_end=args.eps_end, normalise_reward=args.scale_r, cost=args.cost)
+            eps_stop=args.eps_stop, eps_start=args.eps_start, eps_end=args.eps_end, normalise_reward=args.scale_r, cost=args.cost, double_dqn=args.double)
     return model, dm
 
 def run_stage(args, stage):
@@ -111,7 +111,7 @@ def main(args):
         run_stage(args, "stage_1")
     if args.s2:
         run_stage(args, "stage_2")
-    if args.dqn or args.ddqn:
+    if args.dqn:
         run_stage(args, "dqn")
     if args.cqn:
         run_stage(args, "cqn")
@@ -135,8 +135,8 @@ if __name__ == "__main__":
     parser.add_argument('--s2', action='store_true', help='Use stage 2')
     parser.add_argument('--lstm', action='store_true', help='Use LSTM model')
     parser.add_argument('--dqn', action='store_true', help='Use DQN model')
-    parser.add_argument('--ddqn', action='store_true', help='Use Double DQN loss')
     parser.add_argument('--cqn', action='store_true', help='Use Offline DQN model')
+    parser.add_argument('--double', action='store_true', help='Use Double DQN loss')
     parser.add_argument('--scale_r', action='store_true', help='Normalise reward during training')
     parser.add_argument('--buffer_capacity', default=1000000, type=int, help='Buffer capacity for DQN')
     parser.add_argument('--sample_size', default=21936, type=int, help='Sample size from buffer')
