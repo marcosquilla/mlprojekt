@@ -25,8 +25,7 @@ def setup_model_dm(args, s, ckpt=None):
     cars = pd.unique(pd.read_csv(Path('.') / 'data' / 'interim' / 'rental.csv', usecols=[2]).iloc[:,0])
     if s == 'stage_1' or s == 'stage_2':
         dm = AreaDataModule(s=s, lstm=args.lstm, shuffle=args.shuffle, batch_size=args.batch_size, num_workers=args.num_workers,
-         n_zones=args.n_zones
-         ,time_step=timedelta(minutes=60), time_end=datetime(2020,2,5,16,0,0))
+         n_zones=args.n_zones)
         if s == 'stage_1':
             in_size = int(7+24+len(cars)+3*len(area_centers)) # Date (and time), car models and location (current), amount of cars in all zones, and demand
             o = len(pd.read_csv(Path('.') / 'data' / 'processed' / 'actions.csv', usecols=[0]))
@@ -65,9 +64,7 @@ def setup_model_dm(args, s, ckpt=None):
             lr=args.lr, l2=args.l2, gamma=args.gamma, sync_rate=args.sync_rate, buffer_capacity=args.buffer_capacity, 
             warm_up=args.warm_up, sample_size=args.sample_size, batch_size=args.batch_size, num_workers=args.num_workers,
             eps_stop=args.eps_stop, eps_start=args.eps_start, eps_end=args.eps_end, double_dqn=args.double, normalise_reward=args.scale_r,
-            time_step=timedelta(minutes=args.time_step), cost=args.cost, 
-            #time_end=datetime(2020,2,5,16,0,0))
-            time_end=datetime(args.year_end, args.month_end, 1, 0, 0, 0))
+            time_step=timedelta(minutes=args.time_step), cost=args.cost, time_end=datetime(args.year_end, args.month_end, 1, 0, 0, 0))
     elif s == 'cqn':
         in_size = int(7+24+len(cars)+3*len(area_centers)) # Date, car models and location (current), amount of cars in all zones, and demand
         out_size = len(area_centers)+1 # +1 for no movement area
