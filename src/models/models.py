@@ -93,14 +93,14 @@ class BC_Area_s2(pl.LightningModule): # Step 2: Decide where to move, given that
         loss = self.criterion(a_logits, a.float())
         dist = 1-torch.gather(F.softmax(a_logits, dim=1), 1, torch.argmax(a, dim=1).unsqueeze(1))
         self.log('Loss', loss, on_epoch=True, on_step=False, logger=True, sync_dist=True)
-        self.log('Distance', torch.sum(dist), on_epoch=True, on_step=False, logger=True, sync_dist=True)
+        self.log('Distance', torch.mean(dist), on_epoch=True, on_step=False, logger=True, sync_dist=True)
         return loss
 
     def validation_step(self, batch, batch_idx):
         s, a = batch
         a_logits = self(s)
         dist = 1-torch.gather(F.softmax(a_logits, dim=1), 1, torch.argmax(a, dim=1).unsqueeze(1))
-        self.log('measure', -torch.sum(dist), logger=True, sync_dist=True)
+        self.log('measure', -torch.mean(dist), logger=True, sync_dist=True)
 
     def test_step(self, batch, batch_idx):
         s, a = batch
@@ -108,8 +108,8 @@ class BC_Area_s2(pl.LightningModule): # Step 2: Decide where to move, given that
         acc = torch.argmax(a_logits, dim=1)==torch.argmax(a, dim=1) # Total accuracy
         dist = 1-torch.gather(F.softmax(a_logits, dim=1), 1, torch.argmax(a, dim=1).unsqueeze(1))
         self.log('Accuracy', acc.sum()/len(acc), sync_dist=True)
-        self.log('Distance', torch.sum(dist), sync_dist=True)
-        return {'Accuracy': acc.sum()/len(acc), 'Distance': torch.sum(dist)}
+        self.log('Distance', torch.mean(dist), sync_dist=True)
+        return {'Accuracy': acc.sum()/len(acc), 'Distance': torch.mean(dist)}
 
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=self.lr, weight_decay=self.l2)
